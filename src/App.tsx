@@ -1,9 +1,9 @@
 // src/App.tsx
 import React, { useEffect, useMemo, useState } from "react";
-// @ts-ignore
-import { db } from "./firebase";
-
+import { db, signOutFirebase } from "@/firebase";
 import { doc, onSnapshot, setDoc, getDoc } from "firebase/firestore";
+import { Link } from "react-router-dom";
+import { useUser } from "@/components/AuthGate";
 
 // ==========================
 // Simple UI primitives
@@ -93,6 +93,8 @@ function deriveCompany(finalType: EntryType, company: string | undefined) {
   return finalType === "vydavok" ? COMPANY_SHORT : (company || "").trim();
 }
 function buildCsv(entries: Entry[], month: string) {
+  void month; // zamedzí TS chybe na nepoužitý parameter
+
   const header = ["id", "typ", "datum", "cislo_dokladu", "firma", "suma"];
   const rows = entries.map((e) =>
     [e.id, e.type, e.date, e.docNumber, e.company, e.amount.toFixed(2).replace(".", ",")]
@@ -121,6 +123,7 @@ function useIsMobile(breakpointPx = 640) {
 // ==========================
 export default function App() {
   const isMobile = useIsMobile();
+  const user = useUser();
 
   const [entries, setEntries] = useState<Entry[]>([]);
   const [tab, setTab] = useState<EntryType>("prijem");
@@ -228,23 +231,11 @@ export default function App() {
   };
   const upsertEntry = (finalType: EntryType) => {
     if (!finalType) return;
-    if (!form.date) {
-      alert("Zadaj dátum");
-      return;
-    }
-    if (!form.docNumber.trim()) {
-      alert("Zadaj číslo faktúry");
-      return;
-    }
-    if (finalType === "prijem" && !String(form.company || "").trim()) {
-      alert("Zadaj firmu pri príjme");
-      return;
-    }
+    if (!form.date) { alert("Zadaj dátum"); return; }
+    if (!form.docNumber.trim()) { alert("Zadaj číslo faktúry"); return; }
+    if (finalType === "prijem" && !String(form.company || "").trim()) { alert("Zadaj firmu pri príjme"); return; }
     const amt = Number(form.amount) || 0;
-    if (amt <= 0) {
-      alert("Suma musí byť > 0");
-      return;
-    }
+    if (amt <= 0) { alert("Suma musí byť > 0"); return; }
     const clean: Entry = {
       id: editingId ?? uuid(),
       type: finalType,
@@ -271,42 +262,6 @@ export default function App() {
     if (!confirm("Zmazať záznam?")) return;
     setEntries((prev) => prev.filter((e) => e.id !== id));
     if (editingId === id) setEditingId(null);
-  };
-  const clearAll = () => {
-    if (!confirm("Vymazať všetky dáta?")) return;
-    setEntries([]);
-    setEditingId(null);
-  };
-  const exportCSV = () => {
-    const csv = buildCsv(entries, month);
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `gpcs-ucto-${month}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-  const exportJSON = () => {
-    const blob = new Blob([JSON.stringify({ entries }, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `gpcs-ucto-backup.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-  const importJSON = (file: File) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      try {
-        const data = JSON.parse(String(reader.result));
-        if (Array.isArray(data.entries)) setEntries(data.entries);
-      } catch {
-        alert("Neplatný JSON súbor");
-      }
-    };
-    reader.readAsText(file);
   };
 
   // Self-tests
@@ -402,46 +357,24 @@ export default function App() {
                 {headerTitle}
               </h1>
             </div>
-            <div
-              style={{
-                display: "grid",
-                gridAutoFlow: isMobile ? "row" : "column",
-                gap: 8,
-                width: isMobile ? "48%" : "auto",
-              }}
-            >
-              <Button variant="outline" onClick={exportCSV} block={isMobile}>
-                CSV
-              </Button>
-              <Button variant="outline" onClick={exportJSON} block={isMobile}>
-                JSON
-              </Button>
-              <label style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
-                <input
-                  type="file"
-                  accept="application/json"
-                  style={{ display: "none" }}
-                  onChange={(e) => {
-                    const f = (e.target as HTMLInputElement).files?.[0];
-                    if (f) importJSON(f);
-                  }}
-                />
-                <span
-                  style={{
-                    padding: "10px 14px",
-                    border: "1px solid #d1d5db",
-                    borderRadius: 10,
-                    fontSize: 14,
-                    width: isMobile ? "100%" : "auto",
-                    textAlign: "center",
-                  }}
-                >
-                  Import
-                </span>
-              </label>
-              <Button variant="danger" onClick={clearAll} block={isMobile}>
-                Vymazať
-              </Button>
+
+            {/* Header actions: Create Invoice + Auth */}
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <Link to="/invoices/new">
+                <Button>Vytvoriť faktúru</Button>
+              </Link>
+              {user ? (
+                <>
+                  <span style={{ fontSize: 12, color: "#374151" }}>{user.email}</span>
+                  <Button variant="outline" onClick={() => signOutFirebase()}>
+                    Odhlásiť
+                  </Button>
+                </>
+              ) : (
+                <Link to="/login">
+                  <Button variant="outline">Prihlásiť</Button>
+                </Link>
+              )}
             </div>
           </div>
         </div>
@@ -689,21 +622,21 @@ export default function App() {
                   <table style={{ width: "100%", borderCollapse: "separate", borderSpacing: 0 }}>
                     <thead>
                       <tr>
-                        <th style={th}>Dátum</th>
-                        <th style={th}>Č. dokladu</th>
-                        <th style={th}>Firma</th>
-                        <th style={{ ...th, textAlign: "right" }}>Suma</th>
-                        <th style={th}></th>
+                        <th style={thHeader}>Dátum</th>
+                        <th style={thHeader}>Č. dokladu</th>
+                        <th style={thHeader}>Firma</th>
+                        <th style={{ ...thHeader, textAlign: "right" }}>Suma</th>
+                        <th style={thHeader}></th>
                       </tr>
                     </thead>
                     <tbody>
                       {filtered.map((e) => (
                         <tr key={e.id} style={{ borderTop: "1px solid #f1f5f9" }}>
-                          <td style={td}>{e.date}</td>
-                          <td style={td}>{e.docNumber}</td>
-                          <td style={td}>{e.company}</td>
-                          <td style={{ ...td, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{eur(e.amount)}</td>
-                          <td style={td}>
+                          <td style={tdCell}>{e.date}</td>
+                          <td style={tdCell}>{e.docNumber}</td>
+                          <td style={tdCell}>{e.company}</td>
+                          <td style={{ ...tdCell, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{eur(e.amount)}</td>
+                          <td style={tdCell}>
                             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
                               <Button variant="outline" onClick={() => editEntry(e)}>
                                 Upraviť
@@ -717,7 +650,7 @@ export default function App() {
                       ))}
                       {filtered.length === 0 && (
                         <tr>
-                          <td colSpan={5} style={{ ...td, textAlign: "center", padding: 24, color: "#6b7280" }}>
+                          <td colSpan={5} style={{ ...tdCell, textAlign: "center", padding: 24, color: "#6b7280" }}>
                             Žiadne záznamy v tomto mesiaci.
                           </td>
                         </tr>
@@ -762,17 +695,16 @@ const inputStyle: React.CSSProperties = {
   fontSize: 14,
 };
 
-const th: React.CSSProperties = {
+const thHeader: React.CSSProperties = {
   textAlign: "left",
   fontSize: 12,
   color: "#374151",
   padding: "10px 12px",
   borderBottom: "1px solid #e5e7eb",
 };
-const td: React.CSSProperties = {
+const tdCell: React.CSSProperties = {
   padding: "10px 12px",
   borderBottom: "1px solid #f3f4f6",
   whiteSpace: "nowrap",
 };
-
 
