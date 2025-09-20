@@ -62,7 +62,7 @@ interface Entry {
   id: string;
   type: EntryType;
   date: string;
-  docNumber: string;
+  docNumber: string; // môže byť prázdny string
   company: string;
   amount: number;
 }
@@ -232,7 +232,8 @@ export default function App() {
   const upsertEntry = (finalType: EntryType) => {
     if (!finalType) return;
     if (!form.date) { alert("Zadaj dátum"); return; }
-    if (!form.docNumber.trim()) { alert("Zadaj číslo faktúry"); return; }
+    // ⛔ zrušená validácia čísla dokladu – môže byť prázdne
+    // if (!form.docNumber.trim()) { alert("Zadaj číslo faktúry"); return; }
     if (finalType === "prijem" && !String(form.company || "").trim()) { alert("Zadaj firmu pri príjme"); return; }
     const amt = Number(form.amount) || 0;
     if (amt <= 0) { alert("Suma musí byť > 0"); return; }
@@ -240,7 +241,7 @@ export default function App() {
       id: editingId ?? uuid(),
       type: finalType,
       date: form.date,
-      docNumber: form.docNumber.trim(),
+      docNumber: (form.docNumber || "").trim(), // môže byť ""
       company: deriveCompany(finalType, form.company),
       amount: amt,
     };
@@ -366,9 +367,7 @@ export default function App() {
               {user ? (
                 <>
                   <span style={{ fontSize: 12, color: "#374151" }}>{user.email}</span>
-                  <Button variant="outline" onClick={() => signOutFirebase()}>
-                    Odhlásiť
-                  </Button>
+                  <Button variant="outline" onClick={() => signOutFirebase()}>Odhlásiť</Button>
                 </>
               ) : (
                 <Link to="/login">
@@ -515,7 +514,7 @@ export default function App() {
                   />
                 </div>
                 <div>
-                  <Label>Číslo faktúry</Label>
+                  <Label>Číslo dokladu (nepovinné)</Label>
                   <input
                     placeholder="F2025-001"
                     value={form.docNumber}
