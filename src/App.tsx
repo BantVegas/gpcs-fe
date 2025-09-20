@@ -78,17 +78,21 @@ const uuid = () =>
   typeof crypto !== "undefined" && "randomUUID" in crypto
     ? crypto.randomUUID()
     : `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+/** robustné parsovanie SK/EN desatinnej čiarky */
 const parseNum = (v: string) => {
-  if (!v) return 0;
-  let s = v.split("\u00A0").join("");
-  s = s.split(" ").join("");
-  s = s.replace(",", ".");
+  if (v == null) return 0;
+  let s = String(v);
+  s = s.split("\u00A0").join(""); // NBSP
+  s = s.split(" ").join(""); // space
+  s = s.replace(",", "."); // comma → dot
   s = Array.from(s)
     .filter((ch) => "0123456789+-.".includes(ch))
     .join("");
   const n = Number(s);
   return Number.isFinite(n) ? n : 0;
 };
+
 function deriveCompany(finalType: EntryType, company: string | undefined) {
   return finalType === "vydavok" ? COMPANY_SHORT : (company || "").trim();
 }
@@ -134,9 +138,22 @@ export default function App() {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
   });
 
-  const [form, setForm] = useState<{ type: EntryType; date: string; docNumber: string; company?: string; amount: number }>(
-    { type: "prijem", date: todayISO(), docNumber: "", company: "", amount: 0 }
-  );
+  // ✨ amountText = textový buffer pre plynulé zadávanie desatinných čísel
+  const [form, setForm] = useState<{
+    type: EntryType;
+    date: string;
+    docNumber: string;
+    company?: string;
+    amount: number;
+    amountText: string;
+  }>({
+    type: "prijem",
+    date: todayISO(),
+    docNumber: "",
+    company: "",
+    amount: 0,
+    amountText: "",
+  });
 
   // Load (prefer Firestore, fallback localStorage)
   useEffect(() => {
@@ -226,17 +243,19 @@ export default function App() {
 
   // Actions
   const resetForm = (type: EntryType) => {
-    setForm({ type, date: todayISO(), docNumber: "", company: "", amount: 0 });
+    setForm({ type, date: todayISO(), docNumber: "", company: "", amount: 0, amountText: "" });
     setEditingId(null);
   };
   const upsertEntry = (finalType: EntryType) => {
     if (!finalType) return;
     if (!form.date) { alert("Zadaj dátum"); return; }
-    // ⛔ zrušená validácia čísla dokladu – môže byť prázdne
-    // if (!form.docNumber.trim()) { alert("Zadaj číslo faktúry"); return; }
+    // číslo dokladu je nepovinné
     if (finalType === "prijem" && !String(form.company || "").trim()) { alert("Zadaj firmu pri príjme"); return; }
-    const amt = Number(form.amount) || 0;
+
+    // ✅ parse až pri ukladaní
+    const amt = form.amountText !== undefined ? parseNum(form.amountText) : Number(form.amount) || 0;
     if (amt <= 0) { alert("Suma musí byť > 0"); return; }
+
     const clean: Entry = {
       id: editingId ?? uuid(),
       type: finalType,
@@ -256,7 +275,14 @@ export default function App() {
   };
   const editEntry = (e: Entry) => {
     setEditingId(e.id);
-    setForm({ type: e.type, date: e.date, docNumber: e.docNumber, company: e.company, amount: e.amount });
+    setForm({
+      type: e.type,
+      date: e.date,
+      docNumber: e.docNumber,
+      company: e.company,
+      amount: e.amount,
+      amountText: String(e.amount).replace(".", ","), // predvyplň pre SK
+    });
     setTab(e.type);
   };
   const removeEntry = (id: string) => {
@@ -536,10 +562,12 @@ export default function App() {
                 <div>
                   <Label>Suma</Label>
                   <input
+                    type="text"
                     inputMode="decimal"
                     placeholder="0,00"
-                    value={form.amount}
-                    onChange={(e) => setForm((p) => ({ ...p, amount: parseNum(e.target.value) }))}
+                    value={form.amountText}
+                    onChange={(e) => setForm((p) => ({ ...p, amountText: e.target.value }))}
+                    onBlur={(e) => setForm((p) => ({ ...p, amount: parseNum(e.target.value) }))}
                     style={inputStyle}
                   />
                 </div>
