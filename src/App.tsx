@@ -1,4 +1,3 @@
-// src/App.tsx
 import React, { useEffect, useMemo, useState } from "react";
 import { db, signOutFirebase } from "@/firebase";
 import { doc, onSnapshot, setDoc, getDoc } from "firebase/firestore";
@@ -67,7 +66,6 @@ interface Entry {
   amount: number;
 }
 
-const FS_DOC_PATH = { col: "gpcs-ucto", id: "app" };
 const LS_KEY = "gpcs-bookkeeping-v1";
 const COMPANY_FULL = "GPCS s.r.o. – Global Printing and Control Solutions";
 const COMPANY_SHORT = "GPCS s.r.o.";
@@ -84,7 +82,7 @@ const parseNum = (v: string) => {
   if (v == null) return 0;
   let s = String(v);
   s = s.split("\u00A0").join(""); // NBSP
-  s = s.split(" ").join(""); // space
+  s = s.split(" ").join(""); // spaces
   s = s.replace(",", "."); // comma → dot
   s = Array.from(s)
     .filter((ch) => "0123456789+-.".includes(ch))
@@ -97,8 +95,7 @@ function deriveCompany(finalType: EntryType, company: string | undefined) {
   return finalType === "vydavok" ? COMPANY_SHORT : (company || "").trim();
 }
 function buildCsv(entries: Entry[], month: string) {
-  void month; // zamedzí TS chybe na nepoužitý parameter
-
+  void month;
   const header = ["id", "typ", "datum", "cislo_dokladu", "firma", "suma"];
   const rows = entries.map((e) =>
     [e.id, e.type, e.date, e.docNumber, e.company, e.amount.toFixed(2).replace(".", ",")]
@@ -107,6 +104,9 @@ function buildCsv(entries: Entry[], month: string) {
   );
   return [header.join(";"), ...rows].join("\r\n");
 }
+
+// Firestore per-user dokument: /users/{uid}/app/book
+const userDocRef = (uid: string) => doc(db, "users", uid, "app", "book");
 
 // ==========================
 // Hooks
@@ -138,7 +138,7 @@ export default function App() {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
   });
 
-  // ✨ amountText = textový buffer pre plynulé zadávanie desatinných čísel
+  // amountText = textový buffer pre plynulé zadávanie desatinných čísel
   const [form, setForm] = useState<{
     type: EntryType;
     date: string;
@@ -155,20 +155,29 @@ export default function App() {
     amountText: "",
   });
 
-  // Load (prefer Firestore, fallback localStorage)
+  // Load: prihlásený → Firestore, inak localStorage
   useEffect(() => {
     let unsub: undefined | (() => void);
     (async () => {
+      if (!user) {
+        const saved = localStorage.getItem(LS_KEY);
+        if (saved) {
+          try {
+            const parsed = JSON.parse(saved);
+            if (Array.isArray(parsed.entries)) setEntries(parsed.entries as Entry[]);
+          } catch {}
+        } else setEntries([]);
+        return;
+      }
       try {
-        const ref = doc(db, FS_DOC_PATH.col, FS_DOC_PATH.id);
+        const ref = userDocRef(user.uid);
         const snap = await getDoc(ref);
         if (!snap.exists()) await setDoc(ref, { entries: [] });
         unsub = onSnapshot(ref, (s) => {
           const data = s.data();
-          if (Array.isArray(data?.entries)) {
-            setEntries(data.entries);
-            localStorage.setItem(LS_KEY, JSON.stringify({ entries: data.entries }));
-          }
+          const arr = Array.isArray(data?.entries) ? (data!.entries as Entry[]) : [];
+          setEntries(arr);
+          localStorage.setItem(LS_KEY, JSON.stringify({ entries: arr })); // lokálny backup
         });
       } catch {
         const saved = localStorage.getItem(LS_KEY);
@@ -181,20 +190,18 @@ export default function App() {
       }
     })();
     return () => unsub?.();
-  }, []);
+  }, [user]);
 
-  // Persist (try Firestore, else localStorage)
+  // Persist: ak je user, zapíš do Firestore; vždy drž aj local backup
   useEffect(() => {
     const t = setTimeout(async () => {
-      try {
-        const ref = doc(db, FS_DOC_PATH.col, FS_DOC_PATH.id);
-        await setDoc(ref, { entries }, { merge: true });
-      } catch {
-        localStorage.setItem(LS_KEY, JSON.stringify({ entries }));
+      if (user) {
+        try { await setDoc(userDocRef(user.uid), { entries }, { merge: true }); } catch {}
       }
+      localStorage.setItem(LS_KEY, JSON.stringify({ entries }));
     }, 200);
     return () => clearTimeout(t);
-  }, [entries]);
+  }, [entries, user]);
 
   // Derived
   const monthEntries = useMemo(() => entries.filter((e) => (e.date || "").slice(0, 7) === month), [entries, month]);
@@ -252,15 +259,18 @@ export default function App() {
     // číslo dokladu je nepovinné
     if (finalType === "prijem" && !String(form.company || "").trim()) { alert("Zadaj firmu pri príjme"); return; }
 
-    // ✅ parse až pri ukladaní
-    const amt = form.amountText !== undefined ? parseNum(form.amountText) : Number(form.amount) || 0;
+    // spoľahlivo spočítaj z textu (ak je), inak z number
+    const amt = form.amountText !== undefined && form.amountText !== ""
+      ? parseNum(form.amountText)
+      : Number(form.amount) || 0;
+
     if (amt <= 0) { alert("Suma musí byť > 0"); return; }
 
     const clean: Entry = {
       id: editingId ?? uuid(),
       type: finalType,
       date: form.date,
-      docNumber: (form.docNumber || "").trim(), // môže byť ""
+      docNumber: (form.docNumber || "").trim(),
       company: deriveCompany(finalType, form.company),
       amount: amt,
     };
@@ -281,7 +291,7 @@ export default function App() {
       docNumber: e.docNumber,
       company: e.company,
       amount: e.amount,
-      amountText: String(e.amount).replace(".", ","), // predvyplň pre SK
+      amountText: String(e.amount).replace(".", ","),
     });
     setTab(e.type);
   };
@@ -385,7 +395,7 @@ export default function App() {
               </h1>
             </div>
 
-            {/* Header actions: Create Invoice + Auth */}
+            {/* Header actions */}
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
               <Link to="/invoices/new">
                 <Button>Vytvoriť faktúru</Button>
@@ -566,8 +576,13 @@ export default function App() {
                     inputMode="decimal"
                     placeholder="0,00"
                     value={form.amountText}
-                    onChange={(e) => setForm((p) => ({ ...p, amountText: e.target.value }))}
-                    onBlur={(e) => setForm((p) => ({ ...p, amount: parseNum(e.target.value) }))}
+                    onChange={(e) =>
+                      setForm((p) => ({
+                        ...p,
+                        amountText: e.target.value,
+                        amount: parseNum(e.target.value), // priebežný prepočet
+                      }))
+                    }
                     style={inputStyle}
                   />
                 </div>
