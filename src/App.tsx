@@ -130,6 +130,7 @@ export default function App() {
   const user = useUser();
 
   const [entries, setEntries] = useState<Entry[]>([]);
+  const [loaded, setLoaded] = useState(false); // 👈 dôležité: prvé načítanie
   const [tab, setTab] = useState<EntryType>("prijem");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
@@ -158,8 +159,10 @@ export default function App() {
   // Load: prihlásený → Firestore, inak localStorage
   useEffect(() => {
     let unsub: undefined | (() => void);
+    setLoaded(false);
     (async () => {
       if (!user) {
+        // bez prihlásenia – iba localStorage
         const saved = localStorage.getItem(LS_KEY);
         if (saved) {
           try {
@@ -167,6 +170,7 @@ export default function App() {
             if (Array.isArray(parsed.entries)) setEntries(parsed.entries as Entry[]);
           } catch {}
         } else setEntries([]);
+        setLoaded(true);
         return;
       }
       try {
@@ -178,6 +182,7 @@ export default function App() {
           const arr = Array.isArray(data?.entries) ? (data!.entries as Entry[]) : [];
           setEntries(arr);
           localStorage.setItem(LS_KEY, JSON.stringify({ entries: arr })); // lokálny backup
+          setLoaded(true); // 👈 prvý snapshot dorazil
         });
       } catch {
         const saved = localStorage.getItem(LS_KEY);
@@ -187,21 +192,30 @@ export default function App() {
             if (Array.isArray(parsed.entries)) setEntries(parsed.entries as Entry[]);
           } catch {}
         }
+        setLoaded(true);
       }
     })();
     return () => unsub?.();
   }, [user]);
 
-  // Persist: ak je user, zapíš do Firestore; vždy drž aj local backup
+  // Persist: zapisuj len keď máme prvé načítanie hotové
   useEffect(() => {
-    const t = setTimeout(async () => {
-      if (user) {
-        try { await setDoc(userDocRef(user.uid), { entries }, { merge: true }); } catch {}
-      }
+    if (!user || !loaded) {
+      // stále však držíme offline zálohu
       localStorage.setItem(LS_KEY, JSON.stringify({ entries }));
-    }, 200);
-    return () => clearTimeout(t);
-  }, [entries, user]);
+      return;
+    }
+    // zapisuj do Firestore iba po prvom načítaní
+    (async () => {
+      try {
+        await setDoc(userDocRef(user.uid), { entries }, { merge: true });
+      } catch {
+        // ak by sa nepodarilo, aspoň lokálna záloha
+      } finally {
+        localStorage.setItem(LS_KEY, JSON.stringify({ entries }));
+      }
+    })();
+  }, [entries, user, loaded]);
 
   // Derived
   const monthEntries = useMemo(() => entries.filter((e) => (e.date || "").slice(0, 7) === month), [entries, month]);
@@ -256,10 +270,8 @@ export default function App() {
   const upsertEntry = (finalType: EntryType) => {
     if (!finalType) return;
     if (!form.date) { alert("Zadaj dátum"); return; }
-    // číslo dokladu je nepovinné
     if (finalType === "prijem" && !String(form.company || "").trim()) { alert("Zadaj firmu pri príjme"); return; }
 
-    // spoľahlivo spočítaj z textu (ak je), inak z number
     const amt = form.amountText !== undefined && form.amountText !== ""
       ? parseNum(form.amountText)
       : Number(form.amount) || 0;

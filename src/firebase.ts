@@ -1,5 +1,14 @@
 import { initializeApp } from "firebase/app";
-import { getAuth, onAuthStateChanged, signOut } from "firebase/auth";
+import {
+  getAuth,
+  GoogleAuthProvider,
+  setPersistence,
+  browserLocalPersistence,
+  signInWithPopup,
+  signOut,
+  onAuthStateChanged,
+  type User,
+} from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 
 const firebaseConfig = {
@@ -16,7 +25,14 @@ const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 export const db = getFirestore(app);
 
-// helpery pre tvoj existujúci kód
-export const onAuthStateChangedFirebase = (cb: Parameters<typeof onAuthStateChanged>[1]) =>
-  onAuthStateChanged(auth, cb);
+// trvalá session v prehliadači
+setPersistence(auth, browserLocalPersistence).catch(console.error);
+
+// Google provider + helpery
+const provider = new GoogleAuthProvider();
+provider.setCustomParameters({ prompt: "select_account" });
+
+export const signInWithGoogle = () => signInWithPopup(auth, provider);
 export const signOutFirebase = () => signOut(auth);
+export const onAuthStateChangedFirebase = (cb: (u: User | null) => void) =>
+  onAuthStateChanged(auth, cb);
