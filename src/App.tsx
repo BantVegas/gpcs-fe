@@ -686,14 +686,7 @@ export default function App() {
 }
 
 /* ========================== Small helpers ========================== */
-function RowKV({ k, v, danger }: { k: string; v: string; danger?: boolean }) {
-  return (
-    <div style={{ display: "flex", justifyContent: "space-between", color: danger ? "#b91c1c" : undefined }}>
-      <span>{k}</span>
-      <strong>{v}</strong>
-    </div>
-  );
-}
+
 function Label({ children }: { children: React.ReactNode }) {
   return <label style={{ display: "block", fontSize: 12, color: "#374151", marginBottom: 6 }}>{children}</label>;
 }
