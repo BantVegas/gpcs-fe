@@ -4,9 +4,7 @@ import { doc, onSnapshot, setDoc, getDoc } from "firebase/firestore";
 import { Link } from "react-router-dom";
 import { useUser } from "@/components/AuthGate";
 
-// ==========================
-// Simple UI primitives
-// ==========================
+/* ========================== Simple UI ========================== */
 function Card(props: React.HTMLAttributes<HTMLDivElement>) {
   return (
     <div
@@ -53,15 +51,13 @@ function Button(
   return <button {...rest} style={{ ...styles[variant], ...style }} />;
 }
 
-// ==========================
-// Types and helpers
-// ==========================
+/* ========================== Types & helpers ========================== */
 type EntryType = "prijem" | "vydavok";
 interface Entry {
   id: string;
   type: EntryType;
   date: string;
-  docNumber: string; // môže byť prázdny string
+  docNumber: string;
   company: string;
   amount: number;
 }
@@ -77,16 +73,12 @@ const uuid = () =>
     ? crypto.randomUUID()
     : `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-/** robustné parsovanie SK/EN desatinnej čiarky */
+/** parsovanie SK/EN desatinnej čiarky */
 const parseNum = (v: string) => {
   if (v == null) return 0;
   let s = String(v);
-  s = s.split("\u00A0").join(""); // NBSP
-  s = s.split(" ").join(""); // spaces
-  s = s.replace(",", "."); // comma → dot
-  s = Array.from(s)
-    .filter((ch) => "0123456789+-.".includes(ch))
-    .join("");
+  s = s.split("\u00A0").join("").split(" ").join("").replace(",", ".");
+  s = Array.from(s).filter((ch) => "0123456789+-.".includes(ch)).join("");
   const n = Number(s);
   return Number.isFinite(n) ? n : 0;
 };
@@ -94,8 +86,7 @@ const parseNum = (v: string) => {
 function deriveCompany(finalType: EntryType, company: string | undefined) {
   return finalType === "vydavok" ? COMPANY_SHORT : (company || "").trim();
 }
-function buildCsv(entries: Entry[], month: string) {
-  void month;
+function buildCsv(entries: Entry[]) {
   const header = ["id", "typ", "datum", "cislo_dokladu", "firma", "suma"];
   const rows = entries.map((e) =>
     [e.id, e.type, e.date, e.docNumber, e.company, e.amount.toFixed(2).replace(".", ",")]
@@ -108,9 +99,7 @@ function buildCsv(entries: Entry[], month: string) {
 // Firestore per-user dokument: /users/{uid}/app/book
 const userDocRef = (uid: string) => doc(db, "users", uid, "app", "book");
 
-// ==========================
-// Hooks
-// ==========================
+/* ========================== Hooks ========================== */
 function useIsMobile(breakpointPx = 640) {
   const [isMobile, setIsMobile] = useState<boolean>(() => globalThis.innerWidth <= breakpointPx);
   useEffect(() => {
@@ -122,24 +111,17 @@ function useIsMobile(breakpointPx = 640) {
   return isMobile;
 }
 
-// ==========================
-// App
-// ==========================
+/* ========================== App ========================== */
 export default function App() {
   const isMobile = useIsMobile();
   const user = useUser();
 
   const [entries, setEntries] = useState<Entry[]>([]);
-  const [loaded, setLoaded] = useState(false); // 👈 dôležité: prvé načítanie
+  const [loaded, setLoaded] = useState(false);
   const [tab, setTab] = useState<EntryType>("prijem");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
-  const [month, setMonth] = useState<string>(() => {
-    const d = new Date();
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-  });
 
-  // amountText = textový buffer pre plynulé zadávanie desatinných čísel
   const [form, setForm] = useState<{
     type: EntryType;
     date: string;
@@ -162,7 +144,6 @@ export default function App() {
     setLoaded(false);
     (async () => {
       if (!user) {
-        // bez prihlásenia – iba localStorage
         const saved = localStorage.getItem(LS_KEY);
         if (saved) {
           try {
@@ -181,8 +162,8 @@ export default function App() {
           const data = s.data();
           const arr = Array.isArray(data?.entries) ? (data!.entries as Entry[]) : [];
           setEntries(arr);
-          localStorage.setItem(LS_KEY, JSON.stringify({ entries: arr })); // lokálny backup
-          setLoaded(true); // 👈 prvý snapshot dorazil
+          localStorage.setItem(LS_KEY, JSON.stringify({ entries: arr }));
+          setLoaded(true);
         });
       } catch {
         const saved = localStorage.getItem(LS_KEY);
@@ -201,39 +182,41 @@ export default function App() {
   // Persist: zapisuj len keď máme prvé načítanie hotové
   useEffect(() => {
     if (!user || !loaded) {
-      // stále však držíme offline zálohu
       localStorage.setItem(LS_KEY, JSON.stringify({ entries }));
       return;
     }
-    // zapisuj do Firestore iba po prvom načítaní
     (async () => {
       try {
         await setDoc(userDocRef(user.uid), { entries }, { merge: true });
       } catch {
-        // ak by sa nepodarilo, aspoň lokálna záloha
       } finally {
         localStorage.setItem(LS_KEY, JSON.stringify({ entries }));
       }
     })();
   }, [entries, user, loaded]);
 
-  // Derived
-  const monthEntries = useMemo(() => entries.filter((e) => (e.date || "").slice(0, 7) === month), [entries, month]);
+  // ======== Derived (bez mesiaca – cez všetky záznamy) ========
+  // zoradené zostupne podľa dátumu (string YYYY-MM-DD stačí na lexicografické triedenie)
+  const allSorted = useMemo(
+    () => [...entries].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0)),
+    [entries]
+  );
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return monthEntries;
-    return monthEntries.filter((e) => [e.docNumber, e.company, e.type].some((v) => String(v).toLowerCase().includes(q)));
-  }, [monthEntries, query]);
+    if (!q) return allSorted;
+    return allSorted.filter((e) => [e.docNumber, e.company, e.type].some((v) => String(v).toLowerCase().includes(q)));
+  }, [allSorted, query]);
 
-  const byTypeMonth = (t: EntryType) => monthEntries.filter((e) => e.type === t);
+  const byTypeAll = (t: EntryType) => allSorted.filter((e) => e.type === t);
   const totals = useMemo(() => {
-    const inc = byTypeMonth("prijem").reduce((a, e) => a + e.amount, 0);
-    const exp = byTypeMonth("vydavok").reduce((a, e) => a + e.amount, 0);
+    const inc = byTypeAll("prijem").reduce((a, e) => a + e.amount, 0);
+    const exp = byTypeAll("vydavok").reduce((a, e) => a + e.amount, 0);
     const profit = inc - exp;
     return { inc, exp, profit };
-  }, [monthEntries]);
+  }, [allSorted]);
 
-  // Dane
+  // Dane – CIT sadzbu nechávam podľa aktuálneho roku (možno upraviť podľa potreby)
   const EXEC_GROSS = 100;
   const EMP_ZP = 0.10;
   const EMP_SP = 0.352;
@@ -242,7 +225,7 @@ export default function App() {
   const CIT_LOW = 0.15;
   const CIT_HIGH = 0.21;
 
-  const currentYear = useMemo(() => month.slice(0, 4), [month]);
+  const currentYear = String(new Date().getFullYear());
   const annualTurnover = useMemo(
     () =>
       entries
@@ -262,7 +245,7 @@ export default function App() {
     return { employerLevies, profitAfterExec, taxBase, citTax, afterTax, rate: citRate };
   }, [totals, citRate]);
 
-  // Actions
+  // ======== Actions ========
   const resetForm = (type: EntryType) => {
     setForm({ type, date: todayISO(), docNumber: "", company: "", amount: 0, amountText: "" });
     setEditingId(null);
@@ -290,8 +273,6 @@ export default function App() {
       const exists = prev.some((e) => e.id === clean.id);
       return exists ? prev.map((e) => (e.id === clean.id ? clean : e)) : [clean, ...prev];
     });
-    const ym = clean.date.slice(0, 7);
-    setMonth(ym);
     setQuery("");
     resetForm(finalType);
   };
@@ -331,16 +312,14 @@ export default function App() {
     console.assert(parseNum("1 234,50") === 1234.5, "parseNum space+comma failed");
     console.assert(parseNum("1\u00A0234,50") === 1234.5, "parseNum NBSP failed");
     console.assert(parseNum("1000.75") === 1000.75, "parseNum dot failed");
-    const csv = buildCsv(sample, "2025-08");
+    const csv = buildCsv(sample);
     console.assert(!csv.startsWith("\uFEFF"), "CSV must not start with BOM");
     const lines = csv.split("\r\n");
     console.assert(lines.length === sample.length + 1, "CSV rows count mismatch");
     console.assert(lines[0] === "id;typ;datum;cislo_dokladu;firma;suma", "CSV header mismatch");
   }, []);
 
-  // ==========================
-  // UI
-  // ==========================
+  /* ========================== UI ========================== */
   const headerTitle = isMobile ? COMPANY_SHORT : COMPANY_FULL;
 
   return (
@@ -428,7 +407,7 @@ export default function App() {
 
         {/* Main */}
         <div style={{ maxWidth: 1024, margin: "0 auto", padding: isMobile ? 12 : 16 }}>
-          {/* Summary */}
+          {/* Summary – zo všetkých záznamov */}
           <div
             style={{
               display: "grid",
@@ -438,7 +417,7 @@ export default function App() {
           >
             <Card style={{ borderLeft: "8px solid #3b82f6" }}>
               <CardHeader>
-                <CardTitle style={{ color: "#1d4ed8" }}>Príjmy</CardTitle>
+                <CardTitle style={{ color: "#1d4ed8" }}>Príjmy (celkovo)</CardTitle>
               </CardHeader>
               <CardContent>
                 <div style={{ fontSize: isMobile ? 26 : 32, fontWeight: 800, color: "#1d4ed8" }}>{eur(totals.inc)}</div>
@@ -446,7 +425,7 @@ export default function App() {
             </Card>
             <Card style={{ borderLeft: "8px solid #ef4444" }}>
               <CardHeader>
-                <CardTitle style={{ color: "#b91c1c" }}>Výdavky</CardTitle>
+                <CardTitle style={{ color: "#b91c1c" }}>Výdavky (celkovo)</CardTitle>
               </CardHeader>
               <CardContent>
                 <div style={{ fontSize: isMobile ? 26 : 32, fontWeight: 800, color: "#b91c1c" }}>{eur(totals.exp)}</div>
@@ -454,7 +433,7 @@ export default function App() {
             </Card>
             <Card style={{ borderLeft: "8px solid #22c55e" }}>
               <CardHeader>
-                <CardTitle style={{ color: "#15803d" }}>Zisk</CardTitle>
+                <CardTitle style={{ color: "#15803d" }}>Zisk (celkovo)</CardTitle>
               </CardHeader>
               <CardContent>
                 <div style={{ fontSize: isMobile ? 28 : 36, fontWeight: 900, color: "#15803d" }}>
@@ -479,35 +458,16 @@ export default function App() {
             </CardContent>
           </Card>
 
-          {/* Dane a odvody */}
-          <Card style={{ borderLeft: "8px solid #f59e0b", marginTop: 12 }}>
-            <CardHeader>
-              <CardTitle style={{ color: "#92400e" }}>Dane a odvody (mesačne)</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div style={{ display: "grid", gap: 6 }}>
-                <RowKV k="Daň z príjmov (CIT)" v={eur(taxCalc.citTax)} />
-                <RowKV k="Odvody zamestnávateľa k odmene" v={eur(taxCalc.employerLevies)} />
-                <div style={{ height: 1, background: "#e5e7eb", margin: "6px 0" }} />
-                <RowKV k="Spolu dane + odvody" v={eur(taxCalc.citTax + taxCalc.employerLevies)} danger />
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Filtre */}
+          {/* Filtre – iba vyhľadávanie (bez mesiaca) */}
           <Card style={{ marginTop: 12, marginBottom: 12 }}>
             <CardContent>
               <div
                 style={{
                   display: "grid",
                   gap: 12,
-                  gridTemplateColumns: isMobile ? "1fr" : "repeat(3, minmax(0,1fr))",
+                  gridTemplateColumns: isMobile ? "1fr" : "repeat(2, minmax(0,1fr))",
                 }}
               >
-                <div>
-                  <Label>Mesiac</Label>
-                  <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} style={inputStyle} />
-                </div>
                 <div>
                   <Label>Hľadať</Label>
                   <input
@@ -592,7 +552,7 @@ export default function App() {
                       setForm((p) => ({
                         ...p,
                         amountText: e.target.value,
-                        amount: parseNum(e.target.value), // priebežný prepočet
+                        amount: parseNum(e.target.value),
                       }))
                     }
                     style={inputStyle}
@@ -618,10 +578,10 @@ export default function App() {
             </CardContent>
           </Card>
 
-          {/* Záznamy */}
+          {/* Záznamy – všetky */}
           <Card style={{ marginTop: 12 }}>
             <CardHeader>
-              <CardTitle>Záznamy</CardTitle>
+              <CardTitle>Záznamy (všetky)</CardTitle>
             </CardHeader>
             <CardContent>
               {isMobile ? (
@@ -668,7 +628,7 @@ export default function App() {
                     </div>
                   ))}
                   {filtered.length === 0 && (
-                    <div style={{ textAlign: "center", padding: 16, color: "#6b7280" }}>Žiadne záznamy v tomto mesiaci.</div>
+                    <div style={{ textAlign: "center", padding: 16, color: "#6b7280" }}>Žiadne záznamy.</div>
                   )}
                 </div>
               ) : (
@@ -705,7 +665,7 @@ export default function App() {
                       {filtered.length === 0 && (
                         <tr>
                           <td colSpan={5} style={{ ...tdCell, textAlign: "center", padding: 24, color: "#6b7280" }}>
-                            Žiadne záznamy v tomto mesiaci.
+                            Žiadne záznamy.
                           </td>
                         </tr>
                       )}
@@ -716,7 +676,6 @@ export default function App() {
             </CardContent>
           </Card>
 
-          {/* Footer */}
           <div style={{ fontSize: 12, color: "#6b7280", padding: 16, textAlign: "left" }}>
             © {new Date().getFullYear()} {COMPANY_FULL}. Dáta sa synchronizujú s Firebase Firestore. Pri výpadku sa ukladajú lokálne.
           </div>
@@ -726,9 +685,7 @@ export default function App() {
   );
 }
 
-// ==========================
-// Small presentational helpers
-// ==========================
+/* ========================== Small helpers ========================== */
 function RowKV({ k, v, danger }: { k: string; v: string; danger?: boolean }) {
   return (
     <div style={{ display: "flex", justifyContent: "space-between", color: danger ? "#b91c1c" : undefined }}>
@@ -761,4 +718,5 @@ const tdCell: React.CSSProperties = {
   borderBottom: "1px solid #f3f4f6",
   whiteSpace: "nowrap",
 };
+
 
