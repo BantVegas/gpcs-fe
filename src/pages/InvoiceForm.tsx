@@ -243,16 +243,101 @@ export default function InvoiceForm() {
     alert(kind === "INCOME" ? "Príjem uložený." : "Výdaj uložený.");
   }
 
-  /* ───────────── Tlač/PDF ───────────── */
+  /* ───────────── Tlač / Uloženie / Stiahnutie ───────────── */
+  function makeFileName(ext: string) {
+    const safeNum = number?.trim() ? number.trim().replace(/[^\w.-]/g, "_") : "";
+    const base = safeNum || `faktura_${issueDate}`;
+    return `${base}.${ext}`;
+  }
+
+  /** Stabilná tlač: hidden iframe + srcdoc + <base href> kvôli logu */
   function openPrint() {
-    const html = renderPrintableHTML(printRef.current?.innerHTML || "");
-    const w = window.open("", "_blank", "noopener,noreferrer,width=900,height=1200");
-    if (!w) return;
-    w.document.open();
-    w.document.write(html);
-    w.document.close();
-    w.focus();
-    setTimeout(() => w.print(), 100);
+  const html = renderPrintableHTML(printRef.current?.innerHTML || "", window.location.origin);
+
+  const iframe: HTMLIFrameElement = document.createElement("iframe");
+  iframe.style.position = "fixed";
+  iframe.style.right = "0";
+  iframe.style.bottom = "0";
+  iframe.style.width = "0";
+  iframe.style.height = "0";
+  iframe.style.border = "0";
+  iframe.setAttribute("aria-hidden", "true");
+  document.body.appendChild(iframe);
+
+  // --- jediný cleanup bez parentNode ---
+  const cleanup = () => {
+    const rm = (iframe as any).remove as (() => void) | undefined;
+    if (typeof rm === "function") {
+      rm();
+    } else if (document.body.contains(iframe)) {
+      document.body.removeChild(iframe);
+    }
+  };
+
+  const onLoad = () => {
+    try {
+      iframe.contentWindow?.focus();
+      iframe.contentWindow?.print();
+    } finally {
+      setTimeout(cleanup, 1000);
+    }
+  };
+
+  if ("srcdoc" in iframe) {
+    // najtolerantnejšie priradenie – bez vlnoviek
+    iframe.onload = onLoad as (this: GlobalEventHandlers, ev: Event) => any;
+    iframe.srcdoc = html;
+  } else {
+    const anyFrame = iframe as unknown as {
+      contentDocument?: Document | null;
+      contentWindow?: (Window & { document?: Document | undefined }) | null;
+    };
+    const doc: Document | null =
+      anyFrame.contentDocument ?? anyFrame.contentWindow?.document ?? null;
+
+   if (!doc) { cleanup(); return; }
+
+// presná signatúra -> žiadne červené vlnovky
+const handleLoad = (_e: Event) => onLoad();
+
+// TS-safe: pretypuj iframe na EventTarget, listener na EventListener a options na AddEventListenerOptions
+(iframe as EventTarget).addEventListener(
+  "load",
+  handleLoad as EventListener,
+  { once: true } as AddEventListenerOptions
+);
+
+doc.open();
+doc.write(html);
+doc.close();
+  }
+}
+
+
+
+
+
+  /** Otvorí náhľad do nového tabu – môžeš dať „Save Page As…“ alebo vytlačiť do PDF */
+  function openPreviewTab() {
+    const html = renderPrintableHTML(printRef.current?.innerHTML || "", window.location.origin);
+    const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    window.open(url, "_blank", "noopener");
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  }
+
+  /** Priame stiahnutie HTML súboru s náhľadom (vrátane CSS a loga) */
+  function downloadHTML() {
+    const html = renderPrintableHTML(printRef.current?.innerHTML || "", window.location.origin);
+    const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = makeFileName("html");
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
   const isInvoice = kind === "INVOICE";
@@ -448,7 +533,9 @@ export default function InvoiceForm() {
                 </section>
 
                 <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 12 }}>
-                  <button onClick={openPrint} style={btnOutline}>Stiahnuť PDF (náhľad)</button>
+                  <button onClick={openPrint} style={btnOutline}>Tlačiť / Uložiť do PDF</button>
+                  <button onClick={openPreviewTab} style={btnOutline}>Otvoriť náhľad v novom okne</button>
+                  <button onClick={downloadHTML} style={btnOutline}>Stiahnuť HTML</button>
                   <button onClick={saveInvoice} style={btn}>Uložiť faktúru</button>
                 </div>
               </section>
@@ -769,29 +856,27 @@ const segBtnActive: React.CSSProperties = { background: "#111827", color: "white
 const cellInput: React.CSSProperties = { border: "1px solid #d1d5db", borderRadius: 10, padding: "8px 10px", background: "#fff" };
 
 /* ───────────────── helpers ───────────────── */
-function renderPrintableHTML(inner: string) {
+/**
+ * Vráti kompletné HTML s <base href="...">, aby /images/gpcs.png išlo aj v blob/iframe kontexte.
+ * Do BODY sa vloží presne to, čo je v náhľade (vrátane CSS zo <style> v PreviewCard).
+ */
+function renderPrintableHTML(inner: string, origin = "") {
+  const baseHref = origin || (typeof window !== "undefined" ? window.location.origin : "");
   return `<!DOCTYPE html>
-<html lang="sk"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+<html lang="sk">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>Faktúra – náhľad</title>
+<base href="${baseHref}">
 <style>
-body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,'Helvetica Neue','Noto Sans',Arial,'Apple Color Emoji','Segoe UI Emoji';background:#fff;color:#111827}
-.inv-table{width:100%;border-collapse:collapse}
-.inv-table th,.inv-table td{border-bottom:1px solid #e5e7eb;padding:8px;text-align:left}
-.inv-small{color:#6b7280;font-size:12px}
-.inv-right{text-align:right}
-.inv-h1{font-size:22px;font-weight:800;margin:0 0 8px 0}
-.inv-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-.page{max-width:210mm;margin:12mm auto}
-@media print{.page{margin:12mm}}
-</style></head>
+@page { size: A4; margin: 12mm; }
+html, body { background:#fff; color:#111827; font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Helvetica Neue, Noto Sans, Arial, Apple Color Emoji, Segoe UI Emoji; }
+</style>
+</head>
 <body>
-  <div class="page">
-    <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
-      <img src="/images/gpcs.png" alt="Logo" style="height:40px" />
-      <div class="inv-h1">Faktúra</div>
-    </div>
-    ${inner}
-  </div>
-</body></html>`;
+${inner}
+</body>
+</html>`;
 }
 
