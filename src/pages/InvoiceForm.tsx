@@ -66,7 +66,7 @@ const DEFAULT_SUPPLIER: Company = {
   country: "Slovensko",
   phone: "+421950889523",
   email: "info@gpcs.sk",
-  iban: "SK7075000000004034692349",
+  iban: "SK6911000000002944275764",
 };
 
 export default function InvoiceForm() {
