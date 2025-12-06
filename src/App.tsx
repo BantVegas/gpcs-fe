@@ -1,55 +1,25 @@
-import React, { useEffect, useMemo, useState } from "react";
-import { db, signOutFirebase } from "@/firebase";
+import { useEffect, useMemo, useState } from "react";
+import { db } from "@/firebase";
 import { doc, onSnapshot, setDoc, getDoc } from "firebase/firestore";
 import { Link } from "react-router-dom";
 import { useUser } from "@/components/AuthGate";
-
-/* ========================== Simple UI ========================== */
-function Card(props: React.HTMLAttributes<HTMLDivElement>) {
-  return (
-    <div
-      {...props}
-      style={{
-        background: "#fff",
-        borderRadius: 12,
-        border: "1px solid #e5e7eb",
-        boxShadow: "0 1px 2px rgba(0,0,0,0.04)",
-        ...props.style,
-      }}
-    />
-  );
-}
-function CardHeader(props: React.HTMLAttributes<HTMLDivElement>) {
-  return <div {...props} style={{ padding: "12px 16px", borderBottom: "1px solid #f1f5f9", ...props.style }} />;
-}
-function CardTitle(props: React.HTMLAttributes<HTMLHeadingElement>) {
-  return <h3 {...props} style={{ margin: 0, fontSize: 14, fontWeight: 600, ...props.style }} />;
-}
-function CardContent(props: React.HTMLAttributes<HTMLDivElement>) {
-  return <div {...props} style={{ padding: 16, ...props.style }} />;
-}
-function Button(
-  props: React.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: "solid" | "outline" | "danger"; block?: boolean }
-) {
-  const { variant = "solid", style, block, ...rest } = props;
-  const base: React.CSSProperties = {
-    padding: "10px 14px",
-    borderRadius: 10,
-    fontSize: 14,
-    cursor: "pointer",
-    border: "1px solid transparent",
-    background: "#111827",
-    color: "#fff",
-    touchAction: "manipulation",
-    width: block ? "100%" : undefined,
-  };
-  const styles: Record<string, React.CSSProperties> = {
-    solid: base,
-    outline: { ...base, background: "transparent", color: "#111827", borderColor: "#d1d5db" },
-    danger: { ...base, background: "#dc2626" },
-  };
-  return <button {...rest} style={{ ...styles[variant], ...style }} />;
-}
+import { calculateTax, formatEUR } from "@/lib/taxCalculations";
+import {
+  TrendingUp,
+  TrendingDown,
+  Wallet,
+  PiggyBank,
+  FileText,
+  Plus,
+  Search,
+  Calendar,
+  ArrowUpRight,
+  ArrowDownRight,
+  Calculator,
+  Pencil,
+  Trash2,
+  Download,
+} from "lucide-react";
 
 /* ========================== Types & helpers ========================== */
 type EntryType = "prijem" | "vydavok";
@@ -66,14 +36,12 @@ const LS_KEY = "gpcs-bookkeeping-v1";
 const COMPANY_FULL = "GPCS s.r.o. – Global Printing and Control Solutions";
 const COMPANY_SHORT = "GPCS s.r.o.";
 
-const eur = (n: number) => new Intl.NumberFormat("sk-SK", { style: "currency", currency: "EUR" }).format(n);
 const todayISO = () => new Date().toISOString().slice(0, 10);
 const uuid = () =>
   typeof crypto !== "undefined" && "randomUUID" in crypto
     ? crypto.randomUUID()
     : `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-/** parsovanie SK/EN desatinnej čiarky */
 const parseNum = (v: string) => {
   if (v == null) return 0;
   let s = String(v);
@@ -86,6 +54,7 @@ const parseNum = (v: string) => {
 function deriveCompany(finalType: EntryType, company: string | undefined) {
   return finalType === "vydavok" ? COMPANY_SHORT : (company || "").trim();
 }
+
 function buildCsv(entries: Entry[]) {
   const header = ["id", "typ", "datum", "cislo_dokladu", "firma", "suma"];
   const rows = entries.map((e) =>
@@ -96,31 +65,17 @@ function buildCsv(entries: Entry[]) {
   return [header.join(";"), ...rows].join("\r\n");
 }
 
-// Firestore per-user dokument: /users/{uid}/app/book
 const userDocRef = (uid: string) => doc(db, "users", uid, "app", "book");
-
-/* ========================== Hooks ========================== */
-function useIsMobile(breakpointPx = 640) {
-  const [isMobile, setIsMobile] = useState<boolean>(() => globalThis.innerWidth <= breakpointPx);
-  useEffect(() => {
-    const handler = () => setIsMobile(globalThis.innerWidth <= breakpointPx);
-    handler();
-    globalThis.addEventListener("resize", handler);
-    return () => globalThis.removeEventListener("resize", handler);
-  }, [breakpointPx]);
-  return isMobile;
-}
 
 /* ========================== App ========================== */
 export default function App() {
-  const isMobile = useIsMobile();
   const user = useUser();
-
   const [entries, setEntries] = useState<Entry[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [tab, setTab] = useState<EntryType>("prijem");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  const [showForm, setShowForm] = useState(false);
 
   const [form, setForm] = useState<{
     type: EntryType;
@@ -138,7 +93,7 @@ export default function App() {
     amountText: "",
   });
 
-  // Load: prihlásený → Firestore, inak localStorage
+  // Load data
   useEffect(() => {
     let unsub: undefined | (() => void);
     setLoaded(false);
@@ -179,7 +134,7 @@ export default function App() {
     return () => unsub?.();
   }, [user]);
 
-  // Persist: zapisuj len keď máme prvé načítanie hotové
+  // Persist data
   useEffect(() => {
     if (!user || !loaded) {
       localStorage.setItem(LS_KEY, JSON.stringify({ entries }));
@@ -195,8 +150,7 @@ export default function App() {
     })();
   }, [entries, user, loaded]);
 
-  // ======== Derived (bez mesiaca – cez všetky záznamy) ========
-  // zoradené zostupne podľa dátumu (string YYYY-MM-DD stačí na lexicografické triedenie)
+  // Derived data
   const allSorted = useMemo(
     () => [...entries].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0)),
     [entries]
@@ -204,61 +158,57 @@ export default function App() {
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return allSorted;
-    return allSorted.filter((e) => [e.docNumber, e.company, e.type].some((v) => String(v).toLowerCase().includes(q)));
-  }, [allSorted, query]);
+    let result = allSorted;
+    if (q) {
+      result = result.filter((e) => 
+        [e.docNumber, e.company, e.type].some((v) => String(v).toLowerCase().includes(q))
+      );
+    }
+    return result.filter((e) => e.type === tab);
+  }, [allSorted, query, tab]);
 
   const byTypeAll = (t: EntryType) => allSorted.filter((e) => e.type === t);
   const totals = useMemo(() => {
     const inc = byTypeAll("prijem").reduce((a, e) => a + e.amount, 0);
     const exp = byTypeAll("vydavok").reduce((a, e) => a + e.amount, 0);
-    const profit = inc - exp;
-    return { inc, exp, profit };
+    return { inc, exp, profit: inc - exp };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [allSorted]);
-
-  // Dane – CIT sadzbu nechávam podľa aktuálneho roku (možno upraviť podľa potreby)
-  const EXEC_GROSS = 100;
-  const EMP_ZP = 0.10;
-  const EMP_SP = 0.352;
-  const EXEC_EMP_COST = EXEC_GROSS * (1 + EMP_ZP + EMP_SP); // 145.2
-  const CIT_15_THRESHOLD = 60000;
-  const CIT_LOW = 0.15;
-  const CIT_HIGH = 0.21;
 
   const currentYear = String(new Date().getFullYear());
   const annualTurnover = useMemo(
-    () =>
-      entries
-        .filter((e) => e.type === "prijem" && (e.date || "").startsWith(currentYear))
-        .reduce((a, e) => a + e.amount, 0),
+    () => entries.filter((e) => e.type === "prijem" && (e.date || "").startsWith(currentYear)).reduce((a, e) => a + e.amount, 0),
     [entries, currentYear]
   );
-  const citRate = annualTurnover <= CIT_15_THRESHOLD ? CIT_LOW : CIT_HIGH;
 
-  const taxCalc = useMemo(() => {
-    const profitBeforeExec = totals.profit;
-    const employerLevies = EXEC_GROSS * (EMP_ZP + EMP_SP); // 45.2
-    const profitAfterExec = profitBeforeExec - (EXEC_GROSS + employerLevies);
-    const taxBase = Math.max(0, profitAfterExec);
-    const citTax = taxBase * citRate;
-    const afterTax = profitAfterExec - citTax;
-    return { employerLevies, profitAfterExec, taxBase, citTax, afterTax, rate: citRate };
-  }, [totals, citRate]);
+  const taxResult = useMemo(() => {
+    return calculateTax({
+      totalIncome: totals.inc,
+      totalExpenses: totals.exp,
+      annualTurnover,
+      executiveGrossSalary: 100,
+    });
+  }, [totals, annualTurnover]);
 
-  // ======== Actions ========
+  const currentMonth = todayISO().slice(0, 7);
+  const monthlyStats = useMemo(() => {
+    const monthEntries = entries.filter((e) => e.date.startsWith(currentMonth));
+    const inc = monthEntries.filter((e) => e.type === "prijem").reduce((a, e) => a + e.amount, 0);
+    const exp = monthEntries.filter((e) => e.type === "vydavok").reduce((a, e) => a + e.amount, 0);
+    return { inc, exp, profit: inc - exp, count: monthEntries.length };
+  }, [entries, currentMonth]);
+
+  // Actions
   const resetForm = (type: EntryType) => {
     setForm({ type, date: todayISO(), docNumber: "", company: "", amount: 0, amountText: "" });
     setEditingId(null);
   };
+
   const upsertEntry = (finalType: EntryType) => {
     if (!finalType) return;
     if (!form.date) { alert("Zadaj dátum"); return; }
     if (finalType === "prijem" && !String(form.company || "").trim()) { alert("Zadaj firmu pri príjme"); return; }
-
-    const amt = form.amountText !== undefined && form.amountText !== ""
-      ? parseNum(form.amountText)
-      : Number(form.amount) || 0;
-
+    const amt = form.amountText !== undefined && form.amountText !== "" ? parseNum(form.amountText) : Number(form.amount) || 0;
     if (amt <= 0) { alert("Suma musí byť > 0"); return; }
 
     const clean: Entry = {
@@ -275,441 +225,240 @@ export default function App() {
     });
     setQuery("");
     resetForm(finalType);
+    setShowForm(false);
   };
+
   const editEntry = (e: Entry) => {
     setEditingId(e.id);
-    setForm({
-      type: e.type,
-      date: e.date,
-      docNumber: e.docNumber,
-      company: e.company,
-      amount: e.amount,
-      amountText: String(e.amount).replace(".", ","),
-    });
+    setForm({ type: e.type, date: e.date, docNumber: e.docNumber, company: e.company, amount: e.amount, amountText: String(e.amount).replace(".", ",") });
     setTab(e.type);
+    setShowForm(true);
   };
+
   const removeEntry = (id: string) => {
     if (!confirm("Zmazať záznam?")) return;
     setEntries((prev) => prev.filter((e) => e.id !== id));
     if (editingId === id) setEditingId(null);
   };
 
-  // Self-tests
-  useEffect(() => {
-    const sample: Entry[] = [
-      { id: "1", type: "prijem", date: "2025-08-01", docNumber: "F1", company: "A", amount: 100 },
-      { id: "2", type: "vydavok", date: "2025-08-02", docNumber: "F2", company: COMPANY_SHORT, amount: 30 },
-      { id: "3", type: "prijem", date: "2025-08-05", docNumber: "F3", company: "B", amount: 70 },
-    ];
-    const inc = sample.filter((x) => x.type === "prijem").reduce((a, e) => a + e.amount, 0);
-    const exp = sample.filter((x) => x.type === "vydavok").reduce((a, e) => a + e.amount, 0);
-    const profit = inc - exp;
-    console.assert(inc === 170, "Test inc failed");
-    console.assert(exp === 30, "Test exp failed");
-    console.assert(profit === 140, "Test profit failed");
-    console.assert(deriveCompany("vydavok", "X") === COMPANY_SHORT, "deriveCompany vydavok failed");
-    console.assert(deriveCompany("prijem", "Acme") === "Acme", "deriveCompany prijem failed");
-    console.assert(parseNum("1 234,50") === 1234.5, "parseNum space+comma failed");
-    console.assert(parseNum("1\u00A0234,50") === 1234.5, "parseNum NBSP failed");
-    console.assert(parseNum("1000.75") === 1000.75, "parseNum dot failed");
-    const csv = buildCsv(sample);
-    console.assert(!csv.startsWith("\uFEFF"), "CSV must not start with BOM");
-    const lines = csv.split("\r\n");
-    console.assert(lines.length === sample.length + 1, "CSV rows count mismatch");
-    console.assert(lines[0] === "id;typ;datum;cislo_dokladu;firma;suma", "CSV header mismatch");
-  }, []);
-
-  /* ========================== UI ========================== */
-  const headerTitle = isMobile ? COMPANY_SHORT : COMPANY_FULL;
+  const downloadCSV = () => {
+    const csv = buildCsv(entries);
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `ucto-export-${todayISO()}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   return (
-    <div
-      style={{
-        minHeight: "100vh",
-        backgroundImage: "url('/images/gpcs.png')",
-        backgroundSize: "cover",
-        backgroundPosition: "center",
-        backgroundAttachment: "fixed",
-      }}
-    >
-      <div style={{ minHeight: "100vh", background: "rgba(255,255,255,0.86)" }}>
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-100">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Header */}
-        <div
-          style={{
-            position: "sticky",
-            top: 0,
-            zIndex: 30,
-            backdropFilter: "saturate(180%) blur(6px)",
-            borderBottom: "1px solid #e5e7eb",
-            background: "rgba(255,255,255,0.78)",
-          }}
-        >
-          <div
-            style={{
-              maxWidth: 1024,
-              margin: "0 auto",
-              padding: isMobile ? "10px 12px" : "12px 16px",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              gap: 8,
-            }}
-          >
-            <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
-              <div
-                style={{
-                  width: isMobile ? 22 : 24,
-                  height: isMobile ? 22 : 24,
-                  borderRadius: 6,
-                  background: "#111827",
-                  color: "#fff",
-                  display: "grid",
-                  placeItems: "center",
-                  fontSize: isMobile ? 12 : 14,
-                  flex: "0 0 auto",
-                }}
-              >
-                G
-              </div>
-              <h1
-                style={{
-                  fontSize: isMobile ? 16 : 18,
-                  margin: 0,
-                  fontWeight: 700,
-                  whiteSpace: "nowrap",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                }}
-                title={COMPANY_FULL}
-              >
-                {headerTitle}
-              </h1>
-            </div>
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-8">
+          <div>
+            <h1 className="text-2xl sm:text-3xl font-bold text-slate-900">Dashboard</h1>
+            <p className="text-slate-500 mt-1">Prehľad vašich financií • {COMPANY_SHORT}</p>
+          </div>
+          <div className="flex flex-wrap gap-3">
+            <Link to="/invoices/new" className="inline-flex items-center gap-2 px-4 py-2.5 bg-slate-900 text-white rounded-xl font-medium hover:bg-slate-800 transition-all shadow-lg shadow-slate-900/10">
+              <FileText size={18} /> Nová faktúra
+            </Link>
+            <button onClick={() => { setShowForm(true); setTab("prijem"); resetForm("prijem"); }} className="inline-flex items-center gap-2 px-4 py-2.5 bg-emerald-600 text-white rounded-xl font-medium hover:bg-emerald-700 transition-all">
+              <Plus size={18} /> Príjem
+            </button>
+            <button onClick={() => { setShowForm(true); setTab("vydavok"); resetForm("vydavok"); }} className="inline-flex items-center gap-2 px-4 py-2.5 bg-rose-600 text-white rounded-xl font-medium hover:bg-rose-700 transition-all">
+              <Plus size={18} /> Výdavok
+            </button>
+          </div>
+        </div>
 
-            {/* Header actions */}
-            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <Link to="/invoices/new">
-                <Button>Vytvoriť faktúru</Button>
-              </Link>
-              {user ? (
-                <>
-                  <span style={{ fontSize: 12, color: "#374151" }}>{user.email}</span>
-                  <Button variant="outline" onClick={() => signOutFirebase()}>Odhlásiť</Button>
-                </>
-              ) : (
-                <Link to="/login">
-                  <Button variant="outline">Prihlásiť</Button>
-                </Link>
-              )}
+        {/* Stats Cards */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+          <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100">
+            <div className="flex items-center justify-between mb-4">
+              <div className="w-12 h-12 rounded-xl bg-blue-50 flex items-center justify-center">
+                <TrendingUp className="w-6 h-6 text-blue-600" />
+              </div>
+              <span className="text-xs font-medium text-blue-600 bg-blue-50 px-2 py-1 rounded-full">+{byTypeAll("prijem").length}</span>
+            </div>
+            <p className="text-sm text-slate-500 mb-1">Celkové príjmy</p>
+            <p className="text-2xl font-bold text-slate-900">{formatEUR(totals.inc)}</p>
+          </div>
+
+          <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100">
+            <div className="flex items-center justify-between mb-4">
+              <div className="w-12 h-12 rounded-xl bg-rose-50 flex items-center justify-center">
+                <TrendingDown className="w-6 h-6 text-rose-600" />
+              </div>
+              <span className="text-xs font-medium text-rose-600 bg-rose-50 px-2 py-1 rounded-full">{byTypeAll("vydavok").length}</span>
+            </div>
+            <p className="text-sm text-slate-500 mb-1">Celkové výdavky</p>
+            <p className="text-2xl font-bold text-slate-900">{formatEUR(totals.exp)}</p>
+          </div>
+
+          <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100">
+            <div className="flex items-center justify-between mb-4">
+              <div className="w-12 h-12 rounded-xl bg-emerald-50 flex items-center justify-center">
+                <Wallet className="w-6 h-6 text-emerald-600" />
+              </div>
+            </div>
+            <p className="text-sm text-slate-500 mb-1">Hrubý zisk</p>
+            <p className={`text-2xl font-bold ${totals.profit >= 0 ? "text-emerald-600" : "text-rose-600"}`}>{formatEUR(totals.profit)}</p>
+          </div>
+
+          <div className="bg-gradient-to-br from-slate-900 to-slate-800 rounded-2xl p-6 shadow-lg">
+            <div className="flex items-center justify-between mb-4">
+              <div className="w-12 h-12 rounded-xl bg-white/10 flex items-center justify-center">
+                <PiggyBank className="w-6 h-6 text-white" />
+              </div>
+              <span className="text-xs font-medium text-emerald-400 bg-emerald-400/10 px-2 py-1 rounded-full">{taxResult.taxRatePercent}</span>
+            </div>
+            <p className="text-sm text-slate-400 mb-1">Čistý zisk po zdanení</p>
+            <p className="text-2xl font-bold text-white">{formatEUR(taxResult.netProfit)}</p>
+            <p className="text-xs text-slate-400 mt-2">Daň: {formatEUR(taxResult.incomeTax)}</p>
+          </div>
+        </div>
+
+        {/* Monthly + Tax */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-8">
+          <div className="lg:col-span-2 bg-white rounded-2xl p-6 shadow-sm border border-slate-100">
+            <div className="flex items-center justify-between mb-6">
+              <div>
+                <h2 className="text-lg font-semibold text-slate-900">Tento mesiac</h2>
+                <p className="text-sm text-slate-500">{new Date().toLocaleDateString("sk-SK", { month: "long", year: "numeric" })}</p>
+              </div>
+              <div className="flex items-center gap-2 text-sm text-slate-500">
+                <Calendar size={16} /> {monthlyStats.count} transakcií
+              </div>
+            </div>
+            <div className="grid grid-cols-3 gap-4">
+              <div className="text-center p-4 bg-blue-50 rounded-xl">
+                <ArrowUpRight className="w-5 h-5 text-blue-600 mx-auto mb-2" />
+                <p className="text-xs text-slate-500 mb-1">Príjmy</p>
+                <p className="text-lg font-bold text-blue-600">{formatEUR(monthlyStats.inc)}</p>
+              </div>
+              <div className="text-center p-4 bg-rose-50 rounded-xl">
+                <ArrowDownRight className="w-5 h-5 text-rose-600 mx-auto mb-2" />
+                <p className="text-xs text-slate-500 mb-1">Výdavky</p>
+                <p className="text-lg font-bold text-rose-600">{formatEUR(monthlyStats.exp)}</p>
+              </div>
+              <div className="text-center p-4 bg-emerald-50 rounded-xl">
+                <Wallet className="w-5 h-5 text-emerald-600 mx-auto mb-2" />
+                <p className="text-xs text-slate-500 mb-1">Zisk</p>
+                <p className={`text-lg font-bold ${monthlyStats.profit >= 0 ? "text-emerald-600" : "text-rose-600"}`}>{formatEUR(monthlyStats.profit)}</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-xl bg-amber-50 flex items-center justify-center">
+                <Calculator className="w-5 h-5 text-amber-600" />
+              </div>
+              <div>
+                <h3 className="font-semibold text-slate-900">Daňový prehľad SR 2025</h3>
+              </div>
+            </div>
+            <div className="space-y-3 text-sm">
+              <div className="flex justify-between"><span className="text-slate-500">Ročný obrat</span><span className="font-medium">{formatEUR(annualTurnover)}</span></div>
+              <div className="flex justify-between"><span className="text-slate-500">Sadzba dane</span><span className="font-medium">{taxResult.taxRatePercent}</span></div>
+              <div className="flex justify-between"><span className="text-slate-500">Základ dane</span><span className="font-medium">{formatEUR(taxResult.taxBase)}</span></div>
+              <div className="h-px bg-slate-100 my-2" />
+              <div className="flex justify-between"><span className="text-slate-700 font-medium">Odhadovaná daň</span><span className="font-bold text-amber-600">{formatEUR(taxResult.incomeTax)}</span></div>
             </div>
           </div>
         </div>
 
-        {/* Main */}
-        <div style={{ maxWidth: 1024, margin: "0 auto", padding: isMobile ? 12 : 16 }}>
-          {/* Summary – zo všetkých záznamov */}
-          <div
-            style={{
-              display: "grid",
-              gap: 12,
-              gridTemplateColumns: isMobile ? "1fr" : "repeat(3, minmax(0,1fr))",
-            }}
-          >
-            <Card style={{ borderLeft: "8px solid #3b82f6" }}>
-              <CardHeader>
-                <CardTitle style={{ color: "#1d4ed8" }}>Príjmy (celkovo)</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div style={{ fontSize: isMobile ? 26 : 32, fontWeight: 800, color: "#1d4ed8" }}>{eur(totals.inc)}</div>
-              </CardContent>
-            </Card>
-            <Card style={{ borderLeft: "8px solid #ef4444" }}>
-              <CardHeader>
-                <CardTitle style={{ color: "#b91c1c" }}>Výdavky (celkovo)</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div style={{ fontSize: isMobile ? 26 : 32, fontWeight: 800, color: "#b91c1c" }}>{eur(totals.exp)}</div>
-              </CardContent>
-            </Card>
-            <Card style={{ borderLeft: "8px solid #22c55e" }}>
-              <CardHeader>
-                <CardTitle style={{ color: "#15803d" }}>Zisk (celkovo)</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div style={{ fontSize: isMobile ? 28 : 36, fontWeight: 900, color: "#15803d" }}>
-                  {eur(totals.profit)}
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-
-          {/* Zisk po zdanení */}
-          <Card style={{ borderLeft: "8px solid #16a34a", marginTop: 12 }}>
-            <CardHeader>
-              <CardTitle style={{ color: "#166534" }}>Zisk po zdanení</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div style={{ fontSize: isMobile ? 22 : 28, fontWeight: 800, color: "#166534" }}>
-                {eur(taxCalc.afterTax)}
-              </div>
-              <div style={{ fontSize: 12, color: "#475569", marginTop: 4 }}>
-                náklad konateľa {eur(EXEC_EMP_COST)}; CIT {Math.round(taxCalc.rate * 100)}% podľa ročného obratu
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Filtre – iba vyhľadávanie (bez mesiaca) */}
-          <Card style={{ marginTop: 12, marginBottom: 12 }}>
-            <CardContent>
-              <div
-                style={{
-                  display: "grid",
-                  gap: 12,
-                  gridTemplateColumns: isMobile ? "1fr" : "repeat(2, minmax(0,1fr))",
-                }}
-              >
+        {/* Form Modal */}
+        {showForm && (
+          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setShowForm(false)}>
+            <div className="bg-white rounded-2xl p-6 w-full max-w-lg shadow-2xl" onClick={(e) => e.stopPropagation()}>
+              <h2 className="text-xl font-bold text-slate-900 mb-6">{editingId ? "Upraviť" : "Nový"} {tab === "prijem" ? "príjem" : "výdavok"}</h2>
+              <div className="space-y-4">
                 <div>
-                  <Label>Hľadať</Label>
-                  <input
-                    placeholder="firma, číslo dokladu…"
-                    value={query}
-                    onChange={(e) => setQuery(e.target.value)}
-                    style={inputStyle}
-                  />
-                </div>
-                <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "auto auto", gap: 8, alignItems: "end" }}>
-                  <Button variant="outline" block={isMobile}>
-                    Filter
-                  </Button>
-                  <Button variant="outline" onClick={() => window.print()} block={isMobile}>
-                    Tlač
-                  </Button>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Prepínač */}
-          <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "auto auto", gap: 8 }}>
-            <Button variant={tab === "prijem" ? "solid" : "outline"} onClick={() => setTab("prijem")} block={isMobile}>
-              Príjmy
-            </Button>
-            <Button variant={tab === "vydavok" ? "solid" : "outline"} onClick={() => setTab("vydavok")} block={isMobile}>
-              Výdavky
-            </Button>
-          </div>
-
-          {/* Formulár */}
-          <Card style={{ marginTop: 12 }}>
-            <CardHeader>
-              <CardTitle>{tab === "prijem" ? "Nový príjem" : "Nový výdavok"}</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div
-                style={{
-                  display: "grid",
-                  gap: 12,
-                  gridTemplateColumns: isMobile ? "1fr" : "repeat(4, minmax(0,1fr))",
-                }}
-              >
-                <div>
-                  <Label>Dátum</Label>
-                  <input
-                    type="date"
-                    value={form.date}
-                    onChange={(e) => setForm((p) => ({ ...p, date: e.target.value }))}
-                    style={inputStyle}
-                  />
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Dátum</label>
+                  <input type="date" value={form.date} onChange={(e) => setForm((p) => ({ ...p, date: e.target.value }))} className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:border-slate-900 focus:ring-1 focus:ring-slate-900 outline-none" />
                 </div>
                 <div>
-                  <Label>Číslo dokladu (nepovinné)</Label>
-                  <input
-                    placeholder="F2025-001"
-                    value={form.docNumber}
-                    onChange={(e) => setForm((p) => ({ ...p, docNumber: e.target.value }))}
-                    style={inputStyle}
-                  />
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Číslo dokladu</label>
+                  <input type="text" placeholder="F2025-001" value={form.docNumber} onChange={(e) => setForm((p) => ({ ...p, docNumber: e.target.value }))} className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:border-slate-900 focus:ring-1 focus:ring-slate-900 outline-none" />
                 </div>
                 {tab === "prijem" && (
                   <div>
-                    <Label>Meno firmy</Label>
-                    <input
-                      placeholder="Odberateľ"
-                      value={form.company || ""}
-                      onChange={(e) => setForm((p) => ({ ...p, company: e.target.value }))}
-                      style={inputStyle}
-                    />
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Firma</label>
+                    <input type="text" placeholder="Názov firmy" value={form.company || ""} onChange={(e) => setForm((p) => ({ ...p, company: e.target.value }))} className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:border-slate-900 focus:ring-1 focus:ring-slate-900 outline-none" />
                   </div>
                 )}
                 <div>
-                  <Label>Suma</Label>
-                  <input
-                    type="text"
-                    inputMode="decimal"
-                    placeholder="0,00"
-                    value={form.amountText}
-                    onChange={(e) =>
-                      setForm((p) => ({
-                        ...p,
-                        amountText: e.target.value,
-                        amount: parseNum(e.target.value),
-                      }))
-                    }
-                    style={inputStyle}
-                  />
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Suma (EUR)</label>
+                  <input type="text" inputMode="decimal" placeholder="0,00" value={form.amountText} onChange={(e) => setForm((p) => ({ ...p, amountText: e.target.value, amount: parseNum(e.target.value) }))} className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:border-slate-900 focus:ring-1 focus:ring-slate-900 outline-none text-xl font-semibold" />
                 </div>
               </div>
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: isMobile ? "1fr 1fr" : "auto auto",
-                  justifyContent: "flex-end",
-                  gap: 8,
-                  marginTop: 16,
-                }}
-              >
-                <Button onClick={() => upsertEntry(tab)} block={isMobile}>
-                  Uložiť
-                </Button>
-                <Button variant="outline" onClick={() => resetForm(tab)} block={isMobile}>
-                  Vyčistiť
-                </Button>
+              <div className="flex gap-3 mt-6">
+                <button onClick={() => setShowForm(false)} className="flex-1 px-4 py-3 rounded-xl border border-slate-200 text-slate-700 font-medium hover:bg-slate-50">Zrušiť</button>
+                <button onClick={() => upsertEntry(tab)} className={`flex-1 px-4 py-3 rounded-xl text-white font-medium ${tab === "prijem" ? "bg-emerald-600 hover:bg-emerald-700" : "bg-rose-600 hover:bg-rose-700"}`}>{editingId ? "Uložiť" : "Pridať"}</button>
               </div>
-            </CardContent>
-          </Card>
+            </div>
+          </div>
+        )}
 
-          {/* Záznamy – všetky */}
-          <Card style={{ marginTop: 12 }}>
-            <CardHeader>
-              <CardTitle>Záznamy (všetky)</CardTitle>
-            </CardHeader>
-            <CardContent>
-              {isMobile ? (
-                <div style={{ display: "grid", gap: 8 }}>
-                  {filtered.map((e) => (
-                    <div
-                      key={e.id}
-                      style={{
-                        border: "1px solid #e5e7eb",
-                        borderRadius: 10,
-                        padding: 12,
-                        display: "grid",
-                        gap: 6,
-                        background: "#fff",
-                      }}
-                    >
-                      <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-                        <span style={{ fontWeight: 600 }}>{e.docNumber}</span>
-                        <span
-                          style={{
-                            fontSize: 12,
-                            padding: "2px 8px",
-                            borderRadius: 999,
-                            background: e.type === "prijem" ? "#e0f2fe" : "#fee2e2",
-                            color: e.type === "prijem" ? "#075985" : "#991b1b",
-                          }}
-                        >
-                          {e.type}
-                        </span>
-                      </div>
-                      <div style={{ color: "#374151" }}>{e.company}</div>
-                      <div style={{ display: "flex", justifyContent: "space-between" }}>
-                        <span style={{ color: "#6b7280" }}>{e.date}</span>
-                        <strong style={{ fontVariantNumeric: "tabular-nums" }}>{eur(e.amount)}</strong>
-                      </div>
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 6 }}>
-                        <Button variant="outline" onClick={() => editEntry(e)}>
-                          Upraviť
-                        </Button>
-                        <Button variant="danger" onClick={() => removeEntry(e.id)}>
-                          Zmazať
-                        </Button>
-                      </div>
-                    </div>
-                  ))}
-                  {filtered.length === 0 && (
-                    <div style={{ textAlign: "center", padding: 16, color: "#6b7280" }}>Žiadne záznamy.</div>
-                  )}
+        {/* Transactions */}
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+          <div className="p-4 sm:p-6 border-b border-slate-100">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+              <div className="flex items-center gap-4">
+                <h2 className="text-lg font-semibold text-slate-900">Záznamy</h2>
+                <div className="flex bg-slate-100 rounded-lg p-1">
+                  <button onClick={() => setTab("prijem")} className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${tab === "prijem" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500"}`}>Príjmy</button>
+                  <button onClick={() => setTab("vydavok")} className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${tab === "vydavok" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500"}`}>Výdavky</button>
                 </div>
-              ) : (
-                <div style={{ overflowX: "auto" }}>
-                  <table style={{ width: "100%", borderCollapse: "separate", borderSpacing: 0 }}>
-                    <thead>
-                      <tr>
-                        <th style={thHeader}>Dátum</th>
-                        <th style={thHeader}>Č. dokladu</th>
-                        <th style={thHeader}>Firma</th>
-                        <th style={{ ...thHeader, textAlign: "right" }}>Suma</th>
-                        <th style={thHeader}></th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filtered.map((e) => (
-                        <tr key={e.id} style={{ borderTop: "1px solid #f1f5f9" }}>
-                          <td style={tdCell}>{e.date}</td>
-                          <td style={tdCell}>{e.docNumber}</td>
-                          <td style={tdCell}>{e.company}</td>
-                          <td style={{ ...tdCell, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{eur(e.amount)}</td>
-                          <td style={tdCell}>
-                            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-                              <Button variant="outline" onClick={() => editEntry(e)}>
-                                Upraviť
-                              </Button>
-                              <Button variant="danger" onClick={() => removeEntry(e.id)}>
-                                Zmazať
-                              </Button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                      {filtered.length === 0 && (
-                        <tr>
-                          <td colSpan={5} style={{ ...tdCell, textAlign: "center", padding: 24, color: "#6b7280" }}>
-                            Žiadne záznamy.
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
+              </div>
+              <div className="flex items-center gap-3">
+                <div className="relative flex-1 sm:flex-none">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                  <input type="text" placeholder="Hľadať..." value={query} onChange={(e) => setQuery(e.target.value)} className="w-full sm:w-64 pl-10 pr-4 py-2 rounded-lg border border-slate-200 focus:border-slate-900 outline-none text-sm" />
                 </div>
-              )}
-            </CardContent>
-          </Card>
+                <button onClick={downloadCSV} className="p-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50" title="Export CSV"><Download size={18} /></button>
+              </div>
+            </div>
+          </div>
 
-          <div style={{ fontSize: 12, color: "#6b7280", padding: 16, textAlign: "left" }}>
-            © {new Date().getFullYear()} {COMPANY_FULL}. Dáta sa synchronizujú s Firebase Firestore. Pri výpadku sa ukladajú lokálne.
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr className="bg-slate-50">
+                  <th className="text-left text-xs font-medium text-slate-500 uppercase px-6 py-3">Dátum</th>
+                  <th className="text-left text-xs font-medium text-slate-500 uppercase px-6 py-3">Č. dokladu</th>
+                  <th className="text-left text-xs font-medium text-slate-500 uppercase px-6 py-3">Firma</th>
+                  <th className="text-right text-xs font-medium text-slate-500 uppercase px-6 py-3">Suma</th>
+                  <th className="text-right text-xs font-medium text-slate-500 uppercase px-6 py-3">Akcie</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {filtered.map((e) => (
+                  <tr key={e.id} className="hover:bg-slate-50">
+                    <td className="px-6 py-4 text-sm text-slate-600">{e.date}</td>
+                    <td className="px-6 py-4 text-sm font-medium text-slate-900">{e.docNumber || "—"}</td>
+                    <td className="px-6 py-4 text-sm text-slate-600">{e.company}</td>
+                    <td className={`px-6 py-4 text-sm font-semibold text-right ${e.type === "prijem" ? "text-emerald-600" : "text-rose-600"}`}>{e.type === "prijem" ? "+" : "-"}{formatEUR(e.amount)}</td>
+                    <td className="px-6 py-4 text-right">
+                      <button onClick={() => editEntry(e)} className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg"><Pencil size={16} /></button>
+                      <button onClick={() => removeEntry(e.id)} className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg"><Trash2 size={16} /></button>
+                    </td>
+                  </tr>
+                ))}
+                {filtered.length === 0 && (
+                  <tr><td colSpan={5} className="px-6 py-12 text-center text-slate-500">Žiadne záznamy</td></tr>
+                )}
+              </tbody>
+            </table>
           </div>
         </div>
+
+        <div className="text-center text-xs text-slate-400 mt-8">© {new Date().getFullYear()} {COMPANY_FULL}</div>
       </div>
     </div>
   );
 }
-
-/* ========================== Small helpers ========================== */
-
-function Label({ children }: { children: React.ReactNode }) {
-  return <label style={{ display: "block", fontSize: 12, color: "#374151", marginBottom: 6 }}>{children}</label>;
-}
-
-const inputStyle: React.CSSProperties = {
-  width: "100%",
-  padding: 10,
-  borderRadius: 10,
-  border: "1px solid #d1d5db",
-  fontSize: 14,
-};
-
-const thHeader: React.CSSProperties = {
-  textAlign: "left",
-  fontSize: 12,
-  color: "#374151",
-  padding: "10px 12px",
-  borderBottom: "1px solid #e5e7eb",
-};
-const tdCell: React.CSSProperties = {
-  padding: "10px 12px",
-  borderBottom: "1px solid #f3f4f6",
-  whiteSpace: "nowrap",
-};
-
-
