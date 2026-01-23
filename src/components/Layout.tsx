@@ -6,15 +6,26 @@ import { signOutFirebase } from "@/firebase";
 import {
   LayoutDashboard,
   FileText,
-  TrendingUp,
-  TrendingDown,
-  Building2,
-  Calculator,
+  Settings,
   Menu,
   X,
   LogOut,
   User,
   ChevronRight,
+  ChevronDown,
+  FileInput,
+  Users,
+  BookOpen,
+  Landmark,
+  FileSpreadsheet,
+  ClipboardList,
+  Lock,
+  HelpCircle,
+  CalendarCheck,
+  Bell,
+  Wallet,
+  Receipt,
+  ListTree,
 } from "lucide-react";
 
 const COMPANY_SHORT = "GPCS s.r.o.";
@@ -25,14 +36,106 @@ interface NavItem {
   icon: React.ReactNode;
 }
 
-const navItems: NavItem[] = [
-  { label: "Dashboard", path: "/", icon: <LayoutDashboard size={20} /> },
-  { label: "Nová faktúra", path: "/invoices/new", icon: <FileText size={20} /> },
-  { label: "Príjmy", path: "/prijmy", icon: <TrendingUp size={20} /> },
-  { label: "Výdavky", path: "/vydavky", icon: <TrendingDown size={20} /> },
-  { label: "Firmy", path: "/firmy", icon: <Building2 size={20} /> },
-  { label: "Daňová kalkulačka", path: "/dane", icon: <Calculator size={20} /> },
+interface NavSection {
+  title: string;
+  icon: React.ReactNode;
+  items: NavItem[];
+  collapsible?: boolean;
+}
+
+const navSections: NavSection[] = [
+  {
+    title: "Operatíva",
+    icon: <LayoutDashboard size={18} />,
+    items: [
+      { label: "Dashboard", path: "/", icon: <LayoutDashboard size={20} /> },
+      { label: "Doklady (Inbox)", path: "/doklady", icon: <FileInput size={20} /> },
+      { label: "Faktúry (vystavené)", path: "/invoices/new", icon: <FileText size={20} /> },
+      { label: "Partneri", path: "/partneri", icon: <Users size={20} /> },
+      { label: "Nastavenia", path: "/nastavenia", icon: <Settings size={20} /> },
+    ],
+  },
+  {
+    title: "Vedenie účtovníctva",
+    icon: <BookOpen size={18} />,
+    collapsible: true,
+    items: [
+      { label: "Účtovanie", path: "/uctovnictvo/transakcie", icon: <Receipt size={20} /> },
+      { label: "Účtovný denník", path: "/uctovnictvo/dennik", icon: <FileSpreadsheet size={20} /> },
+      { label: "Hlavná kniha", path: "/uctovnictvo/hlavna-kniha", icon: <BookOpen size={20} /> },
+      { label: "Saldokonto", path: "/uctovnictvo/saldokonto", icon: <ClipboardList size={20} /> },
+      { label: "Banka (221)", path: "/uctovnictvo/banka", icon: <Landmark size={20} /> },
+      { label: "Účtový rozvrh", path: "/uctovnictvo/rozvrh", icon: <ListTree size={20} /> },
+      { label: "Šablóny účtovania", path: "/uctovnictvo/sablony", icon: <FileText size={20} /> },
+      { label: "Mzdy", path: "/uctovnictvo/mzdy", icon: <Wallet size={20} /> },
+      { label: "Uzávierky", path: "/uctovnictvo/uzavierky", icon: <Lock size={20} /> },
+      { label: "Návody", path: "/uctovnictvo/navody", icon: <HelpCircle size={20} /> },
+      { label: "Povinnosti & Termíny", path: "/uctovnictvo/ulohy", icon: <CalendarCheck size={20} /> },
+      { label: "Notifikácie", path: "/uctovnictvo/notifikacie", icon: <Bell size={20} /> },
+    ],
+  },
 ];
+
+function NavSectionComponent({
+  section,
+  currentPath,
+  onNavigate,
+}: {
+  section: NavSection;
+  currentPath: string;
+  onNavigate: () => void;
+}) {
+  const [isOpen, setIsOpen] = useState(!section.collapsible);
+  const hasActiveItem = section.items.some((item) => currentPath === item.path || currentPath.startsWith(item.path + "/"));
+
+  return (
+    <div>
+      {section.collapsible ? (
+        <button
+          onClick={() => setIsOpen(!isOpen)}
+          className={`w-full flex items-center gap-2 px-3 py-2 text-xs font-semibold uppercase tracking-wider rounded-lg transition-colors ${
+            hasActiveItem ? "text-slate-900 bg-slate-100" : "text-slate-500 hover:text-slate-700 hover:bg-slate-50"
+          }`}
+        >
+          {section.icon}
+          <span className="flex-1 text-left">{section.title}</span>
+          <ChevronDown size={14} className={`transition-transform ${isOpen ? "rotate-180" : ""}`} />
+        </button>
+      ) : (
+        <div className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-slate-500 flex items-center gap-2">
+          {section.icon}
+          {section.title}
+        </div>
+      )}
+      {(isOpen || !section.collapsible) && (
+        <div className="mt-1 space-y-1">
+          {section.items.map((item) => {
+            const isActive = currentPath === item.path;
+            return (
+              <Link
+                key={item.path}
+                to={item.path}
+                onClick={onNavigate}
+                className={`
+                  flex items-center gap-3 px-4 py-2.5 rounded-xl transition-all duration-200
+                  ${
+                    isActive
+                      ? "bg-slate-900 text-white shadow-lg shadow-slate-900/20"
+                      : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+                  }
+                `}
+              >
+                {item.icon}
+                <span className="font-medium text-sm">{item.label}</span>
+                {isActive && <ChevronRight size={14} className="ml-auto" />}
+              </Link>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   const user = useUser();
@@ -98,29 +201,15 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           </div>
 
           {/* Navigation */}
-          <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
-            {navItems.map((item) => {
-              const isActive = location.pathname === item.path;
-              return (
-                <Link
-                  key={item.path}
-                  to={item.path}
-                  onClick={() => setSidebarOpen(false)}
-                  className={`
-                    flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200
-                    ${
-                      isActive
-                        ? "bg-slate-900 text-white shadow-lg shadow-slate-900/20"
-                        : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
-                    }
-                  `}
-                >
-                  {item.icon}
-                  <span className="font-medium">{item.label}</span>
-                  {isActive && <ChevronRight size={16} className="ml-auto" />}
-                </Link>
-              );
-            })}
+          <nav className="flex-1 p-4 space-y-4 overflow-y-auto">
+            {navSections.map((section) => (
+              <NavSectionComponent
+                key={section.title}
+                section={section}
+                currentPath={location.pathname}
+                onNavigate={() => setSidebarOpen(false)}
+              />
+            ))}
           </nav>
 
           {/* User section */}

@@ -1,0 +1,27 @@
+{
+  "name": "GPCS Ucto",
+  "short_name": "GPCS Ucto",
+  "description": "Profesionalny uctovny a danovy software pre GPCS s.r.o.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/images/gpcs.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/images/gpcs.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["business", "finance", "productivity"],
+  "lang": "sk",
+  "dir": "ltr"
+}

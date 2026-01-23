@@ -1,0 +1,154 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper function to check if user is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    // Helper function to check if user is owner/member of company
+    // Simplified: allow all authenticated users for now
+    function isCompanyMember(companyId) {
+      return isAuthenticated();
+    }
+    
+    // Companies collection
+    match /companies/{companyId} {
+      allow read: if isCompanyMember(companyId);
+      allow write: if isCompanyMember(companyId);
+      
+      // Settings subcollection
+      match /settings/{settingId} {
+        allow read: if isCompanyMember(companyId);
+        allow write: if isCompanyMember(companyId);
+      }
+      
+      // Entries subcollection (income/expense)
+      match /entries/{entryId} {
+        allow read: if isCompanyMember(companyId);
+        allow create: if isCompanyMember(companyId) && 
+          request.resource.data.createdBy == request.auth.uid;
+        allow update, delete: if isCompanyMember(companyId);
+      }
+      
+      // Partners subcollection
+      match /partners/{partnerId} {
+        allow read: if isCompanyMember(companyId);
+        allow write: if isCompanyMember(companyId);
+      }
+      
+      // Invoices Issued subcollection
+      match /invoicesIssued/{invoiceId} {
+        allow read: if isCompanyMember(companyId);
+        allow create: if isCompanyMember(companyId) && 
+          request.resource.data.createdBy == request.auth.uid;
+        allow update, delete: if isCompanyMember(companyId);
+      }
+      
+      // Invoices Received subcollection
+      match /invoicesReceived/{invoiceId} {
+        allow read: if isCompanyMember(companyId);
+        allow create: if isCompanyMember(companyId) && 
+          request.resource.data.createdBy == request.auth.uid;
+        allow update, delete: if isCompanyMember(companyId);
+      }
+      
+      // Uploads subcollection
+      match /uploads/{uploadId} {
+        allow read: if isCompanyMember(companyId);
+        allow create: if isCompanyMember(companyId) && 
+          request.resource.data.createdBy == request.auth.uid;
+        allow update, delete: if isCompanyMember(companyId);
+      }
+      
+      // Transactions subcollection (double-entry accounting)
+      match /transactions/{transactionId} {
+        allow read: if isCompanyMember(companyId);
+        allow create: if isCompanyMember(companyId);
+        allow update, delete: if isCompanyMember(companyId);
+      }
+      
+      // Period locks subcollection
+      match /periodLocks/{periodId} {
+        allow read: if isCompanyMember(companyId);
+        allow write: if isCompanyMember(companyId);
+      }
+      
+      // Audit logs subcollection
+      match /audit/{auditId} {
+        allow read: if isCompanyMember(companyId);
+        allow create: if isCompanyMember(companyId);
+      }
+      
+      // Templates subcollection
+      match /templates/{templateId} {
+        allow read: if isCompanyMember(companyId);
+        allow write: if isCompanyMember(companyId);
+      }
+      
+      // Accounts subcollection (chart of accounts)
+      match /accounts/{accountId} {
+        allow read: if isCompanyMember(companyId);
+        allow write: if isCompanyMember(companyId);
+      }
+      
+      // Chart of accounts (alternative path)
+      match /chartOfAccounts/{accountId} {
+        allow read: if isCompanyMember(companyId);
+        allow write: if isCompanyMember(companyId);
+      }
+      
+      // Guides subcollection
+      match /guides/{guideId} {
+        allow read: if isCompanyMember(companyId);
+        allow write: if isCompanyMember(companyId);
+      }
+      
+      // Payroll subcollection
+      match /payrollRuns/{payrollId} {
+        allow read: if isCompanyMember(companyId);
+        allow write: if isCompanyMember(companyId);
+      }
+      
+      // Payroll (alternative path)
+      match /payroll/{payrollId} {
+        allow read: if isCompanyMember(companyId);
+        allow write: if isCompanyMember(companyId);
+      }
+      
+      // Tasks subcollection
+      match /tasks/{taskId} {
+        allow read: if isCompanyMember(companyId);
+        allow write: if isCompanyMember(companyId);
+      }
+      
+      // Notifications subcollection
+      match /notifications/{notificationId} {
+        allow read: if isCompanyMember(companyId);
+        allow write: if isCompanyMember(companyId);
+      }
+      
+      // Members subcollection
+      match /members/{memberId} {
+        allow read: if isCompanyMember(companyId);
+        allow write: if isCompanyMember(companyId);
+      }
+    }
+    
+    // Legacy invoices collection (for backwards compatibility)
+    match /invoices/{invoiceId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && 
+        request.resource.data.createdBy == request.auth.uid;
+      allow update, delete: if isAuthenticated() && 
+        resource.data.createdBy == request.auth.uid;
+    }
+    
+    // Legacy companies lookup cache
+    match /companies/{ico} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated();
+    }
+  }
+}

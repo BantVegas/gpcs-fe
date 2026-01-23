@@ -10,6 +10,7 @@ import {
   type User,
 } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
+import { getStorage } from "firebase/storage";
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -22,8 +23,11 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 
+export { app };
 export const auth = getAuth(app);
 export const db = getFirestore(app);
+// Explicitly use the correct bucket
+export const storage = getStorage(app, "gs://gpcs-ucty.firebasestorage.app");
 
 // trvalá session v prehliadači
 setPersistence(auth, browserLocalPersistence).catch(console.error);
