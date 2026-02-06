@@ -454,3 +454,298 @@ ${pdfText.substring(0, 8000)}`
       throw new functions.https.HttpsError("internal", error.message || "Extrakcia zlyhala");
     }
   });
+
+// ============================================================================
+// PUSH NOTIFICATIONS
+// ============================================================================
+
+interface NotificationPayload {
+  title: string;
+  body: string;
+  url?: string;
+  tag?: string;
+  priority?: "high" | "normal";
+}
+
+// Send push notification to a specific user
+export const sendPushNotification = functions
+  .region("europe-west1")
+  .https.onCall(async (data: { companyId: string; userId: string; notification: NotificationPayload }, context) => {
+    if (!context.auth) {
+      throw new functions.https.HttpsError("unauthenticated", "Musíte byť prihlásený");
+    }
+
+    const { companyId, userId, notification } = data;
+
+    // Get user's FCM token
+    const tokenDoc = await admin.firestore()
+      .collection("companies")
+      .doc(companyId)
+      .collection("fcmTokens")
+      .doc(userId)
+      .get();
+
+    if (!tokenDoc.exists) {
+      console.log(`No FCM token for user ${userId}`);
+      return { success: false, reason: "no_token" };
+    }
+
+    const tokenData = tokenDoc.data();
+    const fcmToken = tokenData?.token;
+
+    if (!fcmToken) {
+      return { success: false, reason: "no_token" };
+    }
+
+    try {
+      await admin.messaging().send({
+        token: fcmToken,
+        notification: {
+          title: notification.title,
+          body: notification.body,
+        },
+        data: {
+          url: notification.url || "/",
+          tag: notification.tag || "gpcs-notification",
+          priority: notification.priority || "normal",
+        },
+        webpush: {
+          notification: {
+            icon: "/icons/icon-192x192.png",
+            badge: "/icons/icon-72x72.png",
+            vibrate: [200, 100, 200],
+          },
+          fcmOptions: {
+            link: notification.url || "/",
+          },
+        },
+      });
+
+      console.log(`Push notification sent to user ${userId}`);
+      return { success: true };
+    } catch (error: any) {
+      console.error("Failed to send push notification:", error);
+      
+      // If token is invalid, remove it
+      if (error.code === "messaging/invalid-registration-token" ||
+          error.code === "messaging/registration-token-not-registered") {
+        await tokenDoc.ref.delete();
+      }
+      
+      return { success: false, reason: error.message };
+    }
+  });
+
+// Send push notification to all users in a company
+export const sendCompanyNotification = functions
+  .region("europe-west1")
+  .https.onCall(async (data: { companyId: string; notification: NotificationPayload }, context) => {
+    if (!context.auth) {
+      throw new functions.https.HttpsError("unauthenticated", "Musíte byť prihlásený");
+    }
+
+    const { companyId, notification } = data;
+
+    // Get all FCM tokens for the company
+    const tokensSnap = await admin.firestore()
+      .collection("companies")
+      .doc(companyId)
+      .collection("fcmTokens")
+      .get();
+
+    if (tokensSnap.empty) {
+      return { success: false, sent: 0, reason: "no_tokens" };
+    }
+
+    const tokens = tokensSnap.docs
+      .map(d => d.data()?.token)
+      .filter(Boolean) as string[];
+
+    if (tokens.length === 0) {
+      return { success: false, sent: 0, reason: "no_tokens" };
+    }
+
+    try {
+      const response = await admin.messaging().sendEachForMulticast({
+        tokens,
+        notification: {
+          title: notification.title,
+          body: notification.body,
+        },
+        data: {
+          url: notification.url || "/",
+          tag: notification.tag || "gpcs-notification",
+          priority: notification.priority || "normal",
+        },
+        webpush: {
+          notification: {
+            icon: "/icons/icon-192x192.png",
+            badge: "/icons/icon-72x72.png",
+          },
+        },
+      });
+
+      console.log(`Push notifications sent: ${response.successCount} success, ${response.failureCount} failed`);
+      return { success: true, sent: response.successCount, failed: response.failureCount };
+    } catch (error: any) {
+      console.error("Failed to send company notifications:", error);
+      return { success: false, sent: 0, reason: error.message };
+    }
+  });
+
+// Scheduled function to check for due tasks and send reminders
+export const checkDueTasksAndNotify = functions
+  .region("europe-west1")
+  .pubsub.schedule("0 8 * * *") // Every day at 8:00 AM
+  .timeZone("Europe/Bratislava")
+  .onRun(async () => {
+    const now = new Date();
+    const tomorrow = new Date(now);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+
+    // Get all companies
+    const companiesSnap = await admin.firestore().collection("companies").get();
+
+    for (const companyDoc of companiesSnap.docs) {
+      const companyId = companyDoc.id;
+
+      // Get tasks due today or tomorrow
+      const tasksSnap = await admin.firestore()
+        .collection("companies")
+        .doc(companyId)
+        .collection("tasks")
+        .where("status", "!=", "COMPLETED")
+        .get();
+
+      const dueTasks = tasksSnap.docs.filter(d => {
+        const task = d.data();
+        const dueDate = task.dueDate?.toDate?.() || new Date(task.dueDate);
+        return dueDate <= tomorrow;
+      });
+
+      if (dueTasks.length === 0) continue;
+
+      // Get all FCM tokens for this company
+      const tokensSnap = await admin.firestore()
+        .collection("companies")
+        .doc(companyId)
+        .collection("fcmTokens")
+        .get();
+
+      const tokens = tokensSnap.docs
+        .map(d => d.data()?.token)
+        .filter(Boolean) as string[];
+
+      if (tokens.length === 0) continue;
+
+      // Send notification about due tasks
+      const overdueCount = dueTasks.filter(d => {
+        const dueDate = d.data().dueDate?.toDate?.() || new Date(d.data().dueDate);
+        return dueDate < now;
+      }).length;
+
+      const notification = {
+        title: overdueCount > 0 
+          ? `⚠️ ${overdueCount} úloh po termíne!`
+          : `📋 ${dueTasks.length} úloh s blížiacim sa termínom`,
+        body: dueTasks.slice(0, 3).map(d => d.data().title).join(", "),
+      };
+
+      try {
+        await admin.messaging().sendEachForMulticast({
+          tokens,
+          notification,
+          data: {
+            url: "/accounting/tasks",
+            tag: "task-reminder",
+            priority: overdueCount > 0 ? "high" : "normal",
+          },
+          webpush: {
+            notification: {
+              icon: "/icons/icon-192x192.png",
+              badge: "/icons/icon-72x72.png",
+              vibrate: [200, 100, 200],
+            },
+          },
+        });
+        console.log(`Task reminders sent to company ${companyId}`);
+      } catch (error) {
+        console.error(`Failed to send task reminders to company ${companyId}:`, error);
+      }
+    }
+
+    return null;
+  });
+
+// Trigger notification when invoice is overdue
+export const onInvoiceOverdue = functions
+  .region("europe-west1")
+  .pubsub.schedule("0 9 * * *") // Every day at 9:00 AM
+  .timeZone("Europe/Bratislava")
+  .onRun(async () => {
+    const now = new Date();
+
+    const companiesSnap = await admin.firestore().collection("companies").get();
+
+    for (const companyDoc of companiesSnap.docs) {
+      const companyId = companyDoc.id;
+
+      // Get unpaid entries (invoices)
+      const entriesSnap = await admin.firestore()
+        .collection("companies")
+        .doc(companyId)
+        .collection("entries")
+        .where("payment.status", "!=", "PAID")
+        .get();
+
+      const overdueEntries = entriesSnap.docs.filter(d => {
+        const entry = d.data();
+        const dueDate = entry.payment?.dueDate?.toDate?.() || entry.dueDate?.toDate?.();
+        return dueDate && dueDate < now;
+      });
+
+      if (overdueEntries.length === 0) continue;
+
+      // Get FCM tokens
+      const tokensSnap = await admin.firestore()
+        .collection("companies")
+        .doc(companyId)
+        .collection("fcmTokens")
+        .get();
+
+      const tokens = tokensSnap.docs
+        .map(d => d.data()?.token)
+        .filter(Boolean) as string[];
+
+      if (tokens.length === 0) continue;
+
+      const totalOverdue = overdueEntries.reduce((sum, d) => sum + (d.data().amount || 0), 0);
+
+      try {
+        await admin.messaging().sendEachForMulticast({
+          tokens,
+          notification: {
+            title: `💰 ${overdueEntries.length} faktúr po splatnosti`,
+            body: `Celková suma: ${totalOverdue.toFixed(2)} €`,
+          },
+          data: {
+            url: "/income",
+            tag: "invoice-overdue",
+            priority: "high",
+          },
+          webpush: {
+            notification: {
+              icon: "/icons/icon-192x192.png",
+              badge: "/icons/icon-72x72.png",
+              vibrate: [200, 100, 200],
+            },
+          },
+        });
+        console.log(`Overdue invoice reminders sent to company ${companyId}`);
+      } catch (error) {
+        console.error(`Failed to send overdue reminders to company ${companyId}:`, error);
+      }
+    }
+
+    return null;
+  });

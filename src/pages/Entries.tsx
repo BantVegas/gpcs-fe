@@ -31,6 +31,7 @@ import { formatEUR } from "@/lib/taxEngine";
 import type { Entry, Partner, EntryType, PaymentStatus, PaymentMethodType, PartnerSnapshot, Upload as UploadType } from "@/lib/schemas";
 import { CATEGORIES } from "@/lib/schemas";
 import { validateEntity, logAuditEntry, type RuleResult, type DocumentData } from "@/lib/ruleEngine";
+import { createTransactionFromEntry } from "@/lib/autoAccounting";
 import { ValidationModal } from "@/components/HelpTip";
 
 function getCompanyId(): string {
@@ -228,98 +229,10 @@ export default function Entries({ type }: EntriesProps) {
   const handleCreateTransaction = async (entry: Entry) => {
     if (!user) return;
     
-    const companyId = getCompanyId();
-    const entryDate = entry.date instanceof Timestamp ? entry.date.toDate() : new Date(entry.date);
-    const period = `${entryDate.getFullYear()}-${String(entryDate.getMonth() + 1).padStart(2, "0")}`;
-    
-    // Determine accounts based on entry type and category
-    let debitAccount: string;
-    let creditAccount: string;
-    let debitAccountName: string;
-    let creditAccountName: string;
-    
-    if (type === "INCOME") {
-      // Income: MD 311 (Pohľadávky) / D 6xx (Výnosy)
-      debitAccount = "311";
-      debitAccountName = "Pohľadávky z obchodného styku";
-      // Map category to revenue account
-      const revenueAccounts: Record<string, { code: string; name: string }> = {
-        "Služby": { code: "602", name: "Tržby z predaja služieb" },
-        "Tovar": { code: "604", name: "Tržby z predaja tovaru" },
-        "Výrobky": { code: "601", name: "Tržby z predaja vlastných výrobkov" },
-        "Ostatné": { code: "648", name: "Ostatné výnosy z hospodárskej činnosti" },
-      };
-      const revenue = revenueAccounts[entry.category] || revenueAccounts["Služby"];
-      creditAccount = revenue.code;
-      creditAccountName = revenue.name;
-    } else {
-      // Expense: MD 5xx (Náklady) / D 321 (Záväzky)
-      creditAccount = "321";
-      creditAccountName = "Záväzky z obchodného styku";
-      // Map category to expense account
-      const expenseAccounts: Record<string, { code: string; name: string }> = {
-        "Materiál": { code: "501", name: "Spotreba materiálu" },
-        "Energie": { code: "502", name: "Spotreba energie" },
-        "Služby": { code: "518", name: "Ostatné služby" },
-        "Nájom": { code: "518", name: "Ostatné služby" },
-        "Marketing": { code: "518", name: "Ostatné služby" },
-        "Cestovné": { code: "512", name: "Cestovné" },
-        "Telefón": { code: "518", name: "Ostatné služby" },
-        "Poistenie": { code: "548", name: "Ostatné náklady na hospodársku činnosť" },
-        "Opravy": { code: "511", name: "Opravy a udržiavanie" },
-        "Ostatné": { code: "548", name: "Ostatné náklady na hospodársku činnosť" },
-      };
-      const expense = expenseAccounts[entry.category] || expenseAccounts["Služby"];
-      debitAccount = expense.code;
-      debitAccountName = expense.name;
-    }
-    
-    // Create transaction document
-    const { addDoc, collection } = await import("firebase/firestore");
-    const { db } = await import("@/firebase");
-    
-    const transactionData = {
-      number: `${type === "INCOME" ? "VF" : "PF"}-${Date.now()}`,
-      date: entry.date,
-      period,
-      description: entry.description || `${type === "INCOME" ? "Faktúra vydaná" : "Faktúra prijatá"} - ${entry.partnerSnapshot?.name || ""}`,
-      status: "POSTED",
-      postedAt: Timestamp.now(),
-      postedBy: user.uid,
-      lines: [
-        {
-          accountCode: debitAccount,
-          accountName: debitAccountName,
-          side: "MD",
-          amount: entry.amount,
-          partnerId: entry.partnerId || null,
-          partnerName: entry.partnerSnapshot?.name || null,
-        },
-        {
-          accountCode: creditAccount,
-          accountName: creditAccountName,
-          side: "D",
-          amount: entry.amount,
-          partnerId: entry.partnerId || null,
-          partnerName: entry.partnerSnapshot?.name || null,
-        },
-      ],
-      totalMd: entry.amount,
-      totalD: entry.amount,
-      sourceEntryId: entry.id,
-      sourceEntryType: type,
-      createdAt: Timestamp.now(),
-      createdBy: user.uid,
-    };
-    
     try {
-      const transactionsRef = collection(db, "companies", companyId, "transactions");
-      await addDoc(transactionsRef, transactionData);
-      
-      // Update local state to show as accounted
+      await createTransactionFromEntry(entry, user.uid);
       setAccountedEntryIds((prev) => new Set([...prev, entry.id]));
-      
-      alert(`Transakcia vytvorená!\n\nMD ${debitAccount} ${debitAccountName}\nD ${creditAccount} ${creditAccountName}\nSuma: ${formatEUR(entry.amount)}`);
+      alert("Transakcia úspešne vytvorená!");
     } catch (err: any) {
       console.error("Failed to create transaction:", err);
       alert(`Chyba pri vytváraní transakcie: ${err?.message || "Neznáma chyba"}`);

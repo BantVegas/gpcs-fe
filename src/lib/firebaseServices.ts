@@ -32,6 +32,7 @@ import type {
   PaymentStatus,
 } from "./schemas";
 import { DEFAULT_COMPANY_SETTINGS } from "./schemas";
+import { createTransactionFromEntry } from "./autoAccounting";
 
 // ============================================================================
 // CONSTANTS
@@ -162,12 +163,22 @@ export async function createEntry(
   const newRef = doc(entriesRef);
   const now = Timestamp.now();
   
-  await setDoc(newRef, {
+  const fullEntry = {
     ...entry,
     id: newRef.id,
     createdAt: now,
     updatedAt: now,
-  });
+  };
+  
+  await setDoc(newRef, fullEntry);
+  
+  // Auto-create double-entry transaction (MD/D) so it appears in
+  // Účtovanie, Denník, Hlavná kniha, Saldokonto, and Banka
+  try {
+    await createTransactionFromEntry(fullEntry as Entry, entry.createdBy);
+  } catch (err) {
+    console.error("Auto-accounting failed for entry", newRef.id, err);
+  }
   
   return newRef.id;
 }
@@ -673,6 +684,14 @@ export async function createEntryFromExtractedData(
   }
   
   await setDoc(newEntryRef, entry);
+  
+  // Auto-create double-entry transaction (MD/D) so it appears in
+  // Účtovanie, Denník, Hlavná kniha, Saldokonto, and Banka
+  try {
+    await createTransactionFromEntry(entry, userId);
+  } catch (err) {
+    console.error("Auto-accounting failed for extracted entry", newEntryRef.id, err);
+  }
   
   // Update upload with entry reference
   const uploadRef = doc(db, "companies", companyId, "uploads", uploadId);

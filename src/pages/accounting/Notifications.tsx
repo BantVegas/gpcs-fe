@@ -1,7 +1,7 @@
 // src/pages/accounting/Notifications.tsx
 import { useState, useEffect } from "react";
-import { Bell, BellOff, Check, Trash2, Settings, Clock, Calendar } from "lucide-react";
-import { db } from "@/firebase";
+import { Bell, BellOff, Check, Trash2, Settings, Clock, Calendar, Smartphone } from "lucide-react";
+import { db, requestNotificationPermission, saveFCMToken, onForegroundMessage } from "@/firebase";
 import { collection, doc, getDocs, getDoc, setDoc, updateDoc, deleteDoc, Timestamp } from "firebase/firestore";
 import { useUser } from "@/components/AuthGate";
 import type { Notification, NotificationSettings, Task } from "@/lib/accountingSchemas";
@@ -38,7 +38,7 @@ function formatRelativeTime(ts: Timestamp): string {
 }
 
 export default function Notifications() {
-  useUser(); // Auth check
+  const user = useUser();
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [settings, setSettings] = useState<NotificationSettings>(DEFAULT_NOTIFICATION_SETTINGS);
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -46,10 +46,24 @@ export default function Notifications() {
   const [showSettings, setShowSettings] = useState(false);
   const [pushSupported, setPushSupported] = useState(false);
   const [pushPermission, setPushPermission] = useState<NotificationPermission>("default");
+  const [fcmToken, setFcmToken] = useState<string | null>(null);
+  const [registeringMobile, setRegisteringMobile] = useState(false);
 
   useEffect(() => {
     loadData();
     checkPushSupport();
+    
+    // Listen for foreground messages
+    const unsubscribe = onForegroundMessage((payload) => {
+      console.log("Foreground message received:", payload);
+      // Show in-app notification
+      if (payload.notification) {
+        // Create a notification in Firestore
+        createNotificationFromPush(payload.notification.title || "", payload.notification.body || "");
+      }
+    });
+    
+    return () => unsubscribe();
   }, []);
 
   async function loadData() {
@@ -92,6 +106,21 @@ export default function Notifications() {
     }
   }
 
+  async function createNotificationFromPush(title: string, body: string) {
+    const companyId = getCompanyId();
+    const notificationsRef = collection(db, "companies", companyId, "notifications");
+    const newRef = doc(notificationsRef);
+    await setDoc(newRef, {
+      id: newRef.id,
+      type: "PUSH",
+      title,
+      message: body,
+      read: false,
+      createdAt: Timestamp.now(),
+    });
+    await loadData();
+  }
+
   async function requestPushPermission() {
     if (!pushSupported) return;
 
@@ -104,6 +133,32 @@ export default function Notifications() {
         body: "Notifikácie boli úspešne povolené!",
         icon: "/icons/icon-192x192.png",
       });
+    }
+  }
+  
+  async function registerForMobileNotifications() {
+    if (!user) return;
+    
+    setRegisteringMobile(true);
+    try {
+      const token = await requestNotificationPermission();
+      if (token) {
+        const companyId = getCompanyId();
+        await saveFCMToken(user.uid, token, companyId);
+        setFcmToken(token);
+        setPushPermission("granted");
+        
+        // Show success notification
+        new Notification("GPCS Účto", {
+          body: "Mobilné notifikácie boli úspešne aktivované! Budete dostávať upozornenia aj keď je aplikácia zatvorená.",
+          icon: "/icons/icon-192x192.png",
+        });
+      }
+    } catch (error) {
+      console.error("Failed to register for mobile notifications:", error);
+      alert("Nepodarilo sa aktivovať mobilné notifikácie. Skúste to znova.");
+    } finally {
+      setRegisteringMobile(false);
     }
   }
 
@@ -216,6 +271,75 @@ export default function Notifications() {
             Test
           </button>
         </div>
+      </div>
+
+      {/* Mobile push notifications - main feature */}
+      <div className={`rounded-2xl p-5 ${
+        fcmToken 
+          ? "bg-emerald-50 border border-emerald-200" 
+          : "bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200"
+      }`}>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${
+              fcmToken ? "bg-emerald-100" : "bg-blue-100"
+            }`}>
+              <Smartphone size={24} className={fcmToken ? "text-emerald-600" : "text-blue-600"} />
+            </div>
+            <div>
+              <div className="font-semibold text-lg">
+                {fcmToken 
+                  ? "📱 Mobilné notifikácie sú aktívne!" 
+                  : "📱 Aktivujte mobilné notifikácie"}
+              </div>
+              <div className="text-sm text-slate-600">
+                {fcmToken 
+                  ? "Budete dostávať upozornenia na mobil aj keď je aplikácia zatvorená" 
+                  : "Dostávajte upozornenia na faktúry, termíny a úlohy priamo na mobil"}
+              </div>
+            </div>
+          </div>
+          {!fcmToken && (
+            <button
+              onClick={registerForMobileNotifications}
+              disabled={registeringMobile}
+              className="px-5 py-2.5 bg-blue-600 text-white rounded-xl hover:bg-blue-700 text-sm font-medium disabled:opacity-50 flex items-center gap-2"
+            >
+              {registeringMobile ? (
+                <>
+                  <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent"></div>
+                  Aktivujem...
+                </>
+              ) : (
+                <>
+                  <Bell size={18} />
+                  Aktivovať
+                </>
+              )}
+            </button>
+          )}
+        </div>
+        
+        {/* What notifications you'll receive */}
+        {!fcmToken && (
+          <div className="mt-4 pt-4 border-t border-blue-200">
+            <div className="text-sm font-medium text-slate-700 mb-2">Budete dostávať upozornenia na:</div>
+            <div className="grid grid-cols-2 gap-2 text-sm text-slate-600">
+              <div className="flex items-center gap-2">
+                <span className="text-amber-500">⏰</span> Úlohy s blížiacim sa termínom
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-rose-500">💰</span> Faktúry po splatnosti
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-blue-500">📄</span> Nové dokumenty v Inboxe
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-emerald-500">✅</span> Dokončené spracovanie
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Push notification status */}

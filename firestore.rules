@@ -101,8 +101,17 @@ service cloud.firestore {
       
       // Guides subcollection
       match /guides/{guideId} {
-        allow read: if isCompanyMember(companyId);
-        allow write: if isCompanyMember(companyId);
+        allow read, write: if isCompanyMember(companyId);
+      }
+      
+      // FCM tokens for push notifications
+      match /fcmTokens/{userId} {
+        allow read, write: if isCompanyMember(companyId);
+      }
+      
+      // Settings (notifications, etc.)
+      match /settings/{settingId} {
+        allow read, write: if isCompanyMember(companyId);
       }
       
       // Payroll subcollection
