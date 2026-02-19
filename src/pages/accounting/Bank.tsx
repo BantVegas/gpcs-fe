@@ -315,8 +315,8 @@ export default function Bank() {
 
     const token = await getTatraBankaToken();
     if (!isTokenValid(token)) {
-      // Redirect to OAuth
-      const authUrl = getAuthorizationUrl(tbCredentials);
+      // Redirect to OAuth (now async due to PKCE)
+      const authUrl = await getAuthorizationUrl(tbCredentials);
       window.location.href = authUrl;
       return;
     }

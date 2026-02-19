@@ -52,13 +52,34 @@ export interface TatraBankaTransaction {
 // ============================================================================
 
 const TB_API_BASE = "https://api.tatrabanka.sk/premium/production";
-const TB_AUTH_URL = "https://api.tatrabanka.sk/premium/production/auth";
-const TB_TOKEN_URL = "https://api.tatrabanka.sk/premium/production/token";
+const TB_AUTH_URL = "https://api.tatrabanka.sk/premium/production/auth/oauth/v2/authorize";
+const TB_TOKEN_URL = "https://api.tatrabanka.sk/premium/production/auth/oauth/v2/token";
 
 // Sandbox URLs for testing
 const TB_SANDBOX_API_BASE = "https://api.tatrabanka.sk/premium/sandbox";
-const TB_SANDBOX_AUTH_URL = "https://api.tatrabanka.sk/premium/sandbox/auth";
-const TB_SANDBOX_TOKEN_URL = "https://api.tatrabanka.sk/premium/sandbox/token";
+const TB_SANDBOX_AUTH_URL = "https://api.tatrabanka.sk/premium/sandbox/auth/oauth/v2/authorize";
+const TB_SANDBOX_TOKEN_URL = "https://api.tatrabanka.sk/premium/sandbox/auth/oauth/v2/token";
+
+// PKCE Helper functions
+async function generateCodeChallenge(codeVerifier: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(codeVerifier);
+  const digest = await crypto.subtle.digest("SHA-256", data);
+  return btoa(String.fromCharCode(...new Uint8Array(digest)))
+    .replace(/\//g, "_")
+    .replace(/\+/g, "-")
+    .replace(/=/g, "");
+}
+
+function generateCodeVerifier(size = 64): string {
+  const mask = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~";
+  let result = "";
+  const randomValues = crypto.getRandomValues(new Uint8Array(size));
+  for (let i = 0; i < size; i++) {
+    result += mask[randomValues[i] % mask.length];
+  }
+  return result;
+}
 
 function getCompanyId(): string {
   const stored = localStorage.getItem("gpcs-company-id");
@@ -135,18 +156,27 @@ export function isTokenValid(token: TatraBankaToken | null): boolean {
 // OAUTH2 AUTHORIZATION
 // ============================================================================
 
-export function getAuthorizationUrl(credentials: TatraBankaCredentials, useSandbox = false): string {
+export async function getAuthorizationUrl(credentials: TatraBankaCredentials, useSandbox = false): Promise<string> {
   const authUrl = useSandbox ? TB_SANDBOX_AUTH_URL : TB_AUTH_URL;
+  
+  // Generate PKCE code verifier and challenge
+  const codeVerifier = generateCodeVerifier();
+  const codeChallenge = await generateCodeChallenge(codeVerifier);
+  const state = crypto.randomUUID();
+  
   const params = new URLSearchParams({
     client_id: credentials.clientId,
     redirect_uri: credentials.redirectUri,
     response_type: "code",
-    scope: "AISP", // Account Information Service Provider
-    state: crypto.randomUUID(),
+    scope: "PREMIUM_AIS",
+    state: state,
+    code_challenge: codeChallenge,
+    code_challenge_method: "S256",
   });
   
-  // Store state for verification
-  localStorage.setItem("tb_oauth_state", params.get("state")!);
+  // Store state and code_verifier for token exchange
+  localStorage.setItem("tb_oauth_state", state);
+  localStorage.setItem("tb_code_verifier", codeVerifier);
   
   return `${authUrl}?${params.toString()}`;
 }
@@ -158,6 +188,9 @@ export async function exchangeCodeForToken(
 ): Promise<TatraBankaToken> {
   const tokenUrl = useSandbox ? TB_SANDBOX_TOKEN_URL : TB_TOKEN_URL;
   
+  // Get code_verifier from localStorage (stored during authorization)
+  const codeVerifier = localStorage.getItem("tb_code_verifier") || "";
+  
   const response = await fetch(tokenUrl, {
     method: "POST",
     headers: {
@@ -168,6 +201,8 @@ export async function exchangeCodeForToken(
       grant_type: "authorization_code",
       code,
       redirect_uri: credentials.redirectUri,
+      scope: "PREMIUM_AIS",
+      code_verifier: codeVerifier,
     }),
   });
   
@@ -184,6 +219,9 @@ export async function exchangeCodeForToken(
     expiresAt: Date.now() + (data.expires_in || 3600) * 1000,
     scope: data.scope,
   };
+  
+  // Clean up stored verifier
+  localStorage.removeItem("tb_code_verifier");
   
   await saveTatraBankaToken(token);
   return token;
