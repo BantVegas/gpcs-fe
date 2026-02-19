@@ -896,7 +896,7 @@ function TatraBankaSettingsModal({
   const [clientSecret, setClientSecret] = useState(credentials?.clientSecret || "");
   const [iban, setIban] = useState(credentials?.iban || "");
   const [redirectUri, setRedirectUri] = useState(
-    credentials?.redirectUri || `${window.location.origin}/uctovnictvo/banka`
+    credentials?.redirectUri || "https://www.univerzalkalkulacka.sk/uctovnictvo/banka"
   );
 
   const handleSubmit = (e: React.FormEvent) => {

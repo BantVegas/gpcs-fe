@@ -80,7 +80,7 @@ export async function getTatraBankaCredentials(): Promise<TatraBankaCredentials 
   return {
     clientId: data.clientId || "",
     clientSecret: data.clientSecret || "",
-    redirectUri: data.redirectUri || `${window.location.origin}/banka/callback`,
+    redirectUri: data.redirectUri || "https://www.univerzalkalkulacka.sk/uctovnictvo/banka",
     iban: data.iban || "",
   };
 }
