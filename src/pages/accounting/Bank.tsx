@@ -1,10 +1,12 @@
 // src/pages/accounting/Bank.tsx
-import { useState, useEffect } from "react";
-import { Search, Download, X, ArrowUpRight, ArrowDownLeft, AlertTriangle } from "lucide-react";
+import { useState, useEffect, useCallback } from "react";
+import { Search, Download, X, ArrowUpRight, ArrowDownLeft, AlertTriangle, Settings, RefreshCw, CheckCircle2, Zap } from "lucide-react";
 import { db } from "@/firebase";
 import { collection, getDocs, Timestamp } from "firebase/firestore";
 import { useUser } from "@/components/AuthGate";
 import type { Transaction, TransactionLine } from "@/lib/accountingSchemas";
+import type { Entry } from "@/lib/schemas";
+import { subscribeToEntries } from "@/lib/firebaseServices";
 import { 
   getTemplatesForType, 
   createTransactionFromTemplate,
@@ -12,6 +14,20 @@ import {
 } from "@/lib/templateEngine";
 import { validateEntity, logAuditEntry, type RuleResult, type BankPairingData } from "@/lib/ruleEngine";
 import { ValidationModal } from "@/components/HelpTip";
+import {
+  getTatraBankaCredentials,
+  saveTatraBankaCredentials,
+  getTatraBankaToken,
+  isTokenValid,
+  getAuthorizationUrl,
+  exchangeCodeForToken,
+  getTransactions,
+  findPairingMatches,
+  type TatraBankaCredentials,
+  type TatraBankaTransaction,
+  type PairingMatch,
+} from "@/lib/tatraBankaApi";
+import { createTransactionFromEntry } from "@/lib/autoAccounting";
 
 function getCompanyId(): string {
   const stored = localStorage.getItem("gpcs-company-id");
@@ -64,6 +80,56 @@ export default function Bank() {
   const [showPairingModal, setShowPairingModal] = useState(false);
   const [selectedMovement, setSelectedMovement] = useState<BankMovement | null>(null);
   const [templates, setTemplates] = useState<ExtendedTemplate[]>([]);
+
+  // Tatra Banka API state
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [tbCredentials, setTbCredentials] = useState<TatraBankaCredentials | null>(null);
+  const [tbConnected, setTbConnected] = useState(false);
+  const [tbTransactions, setTbTransactions] = useState<TatraBankaTransaction[]>([]);
+  const [tbLoading, setTbLoading] = useState(false);
+  const [entries, setEntries] = useState<Entry[]>([]);
+  const [pairingMatches, setPairingMatches] = useState<PairingMatch[]>([]);
+  const [showAutoPairModal, setShowAutoPairModal] = useState(false);
+
+  // Load entries for auto-pairing
+  useEffect(() => {
+    const unsub = subscribeToEntries(setEntries);
+    return () => unsub();
+  }, []);
+
+  // Load Tatra Banka credentials and check connection
+  useEffect(() => {
+    async function loadTbStatus() {
+      const creds = await getTatraBankaCredentials();
+      setTbCredentials(creds);
+      
+      if (creds?.clientId) {
+        const token = await getTatraBankaToken();
+        setTbConnected(isTokenValid(token));
+      }
+    }
+    loadTbStatus();
+  }, []);
+
+  // Handle OAuth callback
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get("code");
+    
+    if (code && tbCredentials) {
+      (async () => {
+        try {
+          await exchangeCodeForToken(code, tbCredentials);
+          setTbConnected(true);
+          // Clean URL
+          window.history.replaceState({}, "", window.location.pathname);
+        } catch (err) {
+          console.error("OAuth callback failed:", err);
+          alert("Pripojenie k Tatra Banke zlyhalo");
+        }
+      })();
+    }
+  }, [tbCredentials]);
 
   useEffect(() => {
     loadData();
@@ -239,6 +305,75 @@ export default function Bank() {
     setShowPairingModal(true);
   };
 
+  // Fetch transactions from Tatra Banka API
+  const fetchTatraBankaTransactions = useCallback(async () => {
+    if (!tbCredentials?.iban) {
+      alert("Najprv nastavte IBAN v nastaveniach");
+      setShowSettingsModal(true);
+      return;
+    }
+
+    const token = await getTatraBankaToken();
+    if (!isTokenValid(token)) {
+      // Redirect to OAuth
+      const authUrl = getAuthorizationUrl(tbCredentials);
+      window.location.href = authUrl;
+      return;
+    }
+
+    setTbLoading(true);
+    try {
+      // Get transactions for current month
+      const [year, month] = periodFilter.split("-").map(Number);
+      const dateFrom = new Date(year, month - 1, 1);
+      const dateTo = new Date(year, month, 0); // Last day of month
+
+      const transactions = await getTransactions(
+        token!.accessToken,
+        tbCredentials.iban,
+        dateFrom,
+        dateTo
+      );
+
+      setTbTransactions(transactions);
+
+      // Find pairing matches
+      const matches = findPairingMatches(transactions, entries);
+      setPairingMatches(matches);
+
+      if (matches.length > 0) {
+        setShowAutoPairModal(true);
+      } else {
+        alert(`Načítaných ${transactions.length} transakcií z Tatra Banky. Žiadne návrhy na párovanie.`);
+      }
+    } catch (err: any) {
+      console.error("Failed to fetch TB transactions:", err);
+      alert(`Chyba: ${err?.message || "Nepodarilo sa načítať transakcie"}`);
+    }
+    setTbLoading(false);
+  }, [tbCredentials, periodFilter, entries]);
+
+  // Handle auto-pair confirmation
+  const handleAutoPair = async (match: PairingMatch) => {
+    if (!user) return;
+
+    try {
+      // Mark entry as paid and create the accounting transaction
+      await createTransactionFromEntry(match.entry, user.uid);
+      
+      // Remove from matches
+      setPairingMatches((prev) => prev.filter((m) => m.entry.id !== match.entry.id));
+      
+      // Reload data
+      await loadData();
+      
+      alert(`Úspešne spárované: ${match.entry.description || match.entry.docNumber}`);
+    } catch (err: any) {
+      console.error("Auto-pair failed:", err);
+      alert(`Chyba: ${err?.message || "Párovanie zlyhalo"}`);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -253,15 +388,44 @@ export default function Bank() {
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">Banka (221)</h1>
-          <p className="text-slate-500">Pohyby na bankovom účte a párovanie platieb</p>
+          <p className="text-slate-500">
+            Pohyby na bankovom účte a párovanie platieb
+            {tbConnected && (
+              <span className="ml-2 inline-flex items-center gap-1 text-emerald-600">
+                <CheckCircle2 size={14} />
+                Tatra Banka pripojená
+              </span>
+            )}
+          </p>
         </div>
-        <button
-          onClick={exportCSV}
-          className="flex items-center gap-2 px-4 py-2.5 bg-slate-900 text-white rounded-xl hover:bg-slate-800 transition-colors"
-        >
-          <Download size={20} />
-          Export CSV
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button
+            onClick={() => setShowSettingsModal(true)}
+            className="flex items-center gap-2 px-4 py-2.5 border border-slate-200 text-slate-700 rounded-xl hover:bg-slate-50 transition-colors"
+          >
+            <Settings size={18} />
+            Nastavenia
+          </button>
+          <button
+            onClick={fetchTatraBankaTransactions}
+            disabled={tbLoading}
+            className="flex items-center gap-2 px-4 py-2.5 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition-colors disabled:opacity-50"
+          >
+            {tbLoading ? (
+              <RefreshCw size={18} className="animate-spin" />
+            ) : (
+              <Zap size={18} />
+            )}
+            {tbLoading ? "Načítavam..." : "Auto-párovanie"}
+          </button>
+          <button
+            onClick={exportCSV}
+            className="flex items-center gap-2 px-4 py-2.5 bg-slate-900 text-white rounded-xl hover:bg-slate-800 transition-colors"
+          >
+            <Download size={20} />
+            Export CSV
+          </button>
+        </div>
       </div>
 
       {/* Summary cards */}
@@ -421,6 +585,29 @@ export default function Bank() {
             setSelectedMovement(null);
             loadData();
           }}
+        />
+      )}
+
+      {/* Tatra Banka Settings Modal */}
+      {showSettingsModal && (
+        <TatraBankaSettingsModal
+          credentials={tbCredentials}
+          onSave={async (creds) => {
+            await saveTatraBankaCredentials(creds);
+            setTbCredentials(creds);
+            setShowSettingsModal(false);
+          }}
+          onClose={() => setShowSettingsModal(false)}
+        />
+      )}
+
+      {/* Auto-Pair Suggestions Modal */}
+      {showAutoPairModal && pairingMatches.length > 0 && (
+        <AutoPairModal
+          matches={pairingMatches}
+          tbTransactions={tbTransactions}
+          onPair={handleAutoPair}
+          onClose={() => setShowAutoPairModal(false)}
         />
       )}
     </div>
@@ -687,6 +874,244 @@ function PairingModal({
             } : undefined}
           />
         )}
+      </div>
+    </div>
+  );
+}
+
+// ============================================================================
+// TATRA BANKA SETTINGS MODAL
+// ============================================================================
+
+function TatraBankaSettingsModal({
+  credentials,
+  onSave,
+  onClose,
+}: {
+  credentials: TatraBankaCredentials | null;
+  onSave: (creds: TatraBankaCredentials) => void;
+  onClose: () => void;
+}) {
+  const [clientId, setClientId] = useState(credentials?.clientId || "");
+  const [clientSecret, setClientSecret] = useState(credentials?.clientSecret || "");
+  const [iban, setIban] = useState(credentials?.iban || "");
+  const [redirectUri, setRedirectUri] = useState(
+    credentials?.redirectUri || `${window.location.origin}/uctovnictvo/banka`
+  );
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    onSave({ clientId, clientSecret, iban, redirectUri });
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div
+        className="bg-white rounded-2xl p-6 w-full max-w-lg shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between mb-6">
+          <h2 className="text-xl font-bold text-slate-900">Nastavenia Tatra Banka API</h2>
+          <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-lg">
+            <X size={20} />
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">
+              API Key / Client ID
+            </label>
+            <input
+              type="text"
+              value={clientId}
+              onChange={(e) => setClientId(e.target.value)}
+              placeholder="l7e62e91b317ac46818be34d0f07a8efe"
+              className="w-full px-4 py-2.5 rounded-xl border border-slate-200 focus:border-slate-900 focus:ring-1 focus:ring-slate-900 outline-none font-mono text-sm"
+              required
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">
+              Shared Secret / Client Secret
+            </label>
+            <input
+              type="password"
+              value={clientSecret}
+              onChange={(e) => setClientSecret(e.target.value)}
+              placeholder="••••••••••••••••"
+              className="w-full px-4 py-2.5 rounded-xl border border-slate-200 focus:border-slate-900 focus:ring-1 focus:ring-slate-900 outline-none font-mono text-sm"
+              required
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">
+              IBAN účtu
+            </label>
+            <input
+              type="text"
+              value={iban}
+              onChange={(e) => setIban(e.target.value.toUpperCase().replace(/\s/g, ""))}
+              placeholder="SK0511000000002600000054"
+              className="w-full px-4 py-2.5 rounded-xl border border-slate-200 focus:border-slate-900 focus:ring-1 focus:ring-slate-900 outline-none font-mono text-sm"
+              required
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">
+              Redirect URI
+            </label>
+            <input
+              type="text"
+              value={redirectUri}
+              onChange={(e) => setRedirectUri(e.target.value)}
+              className="w-full px-4 py-2.5 rounded-xl border border-slate-200 focus:border-slate-900 focus:ring-1 focus:ring-slate-900 outline-none text-sm"
+            />
+            <p className="mt-1 text-xs text-slate-500">
+              Táto URL musí byť zaregistrovaná v Tatra Banka Developer Portáli
+            </p>
+          </div>
+
+          <div className="flex gap-3 pt-4">
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex-1 px-4 py-3 rounded-xl border border-slate-200 text-slate-700 font-medium hover:bg-slate-50"
+            >
+              Zrušiť
+            </button>
+            <button
+              type="submit"
+              className="flex-1 px-4 py-3 rounded-xl bg-slate-900 text-white font-medium hover:bg-slate-800"
+            >
+              Uložiť
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================================
+// AUTO-PAIR MODAL
+// ============================================================================
+
+function AutoPairModal({
+  matches,
+  tbTransactions,
+  onPair,
+  onClose,
+}: {
+  matches: PairingMatch[];
+  tbTransactions: TatraBankaTransaction[];
+  onPair: (match: PairingMatch) => void;
+  onClose: () => void;
+}) {
+  const [pairing, setPairing] = useState<string | null>(null);
+
+  const handlePair = async (match: PairingMatch) => {
+    setPairing(match.entry.id);
+    await onPair(match);
+    setPairing(null);
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div
+        className="bg-white rounded-2xl p-6 w-full max-w-2xl shadow-2xl max-h-[90vh] overflow-y-auto"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between mb-6">
+          <div>
+            <h2 className="text-xl font-bold text-slate-900">Auto-párovanie platieb</h2>
+            <p className="text-sm text-slate-500">
+              Nájdených {tbTransactions.length} transakcií, {matches.length} návrhov na párovanie
+            </p>
+          </div>
+          <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-lg">
+            <X size={20} />
+          </button>
+        </div>
+
+        <div className="space-y-3">
+          {matches.map((match) => (
+            <div
+              key={`${match.bankTransaction.id}-${match.entry.id}`}
+              className="border border-slate-200 rounded-xl p-4 hover:border-slate-300"
+            >
+              <div className="flex items-start justify-between gap-4">
+                <div className="flex-1">
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                      match.confidence >= 70 ? "bg-emerald-100 text-emerald-700" :
+                      match.confidence >= 50 ? "bg-amber-100 text-amber-700" :
+                      "bg-slate-100 text-slate-600"
+                    }`}>
+                      {match.confidence}% zhoda
+                    </span>
+                    {match.matchReasons.map((reason, i) => (
+                      <span key={i} className="px-2 py-0.5 rounded bg-blue-50 text-blue-600 text-xs">
+                        {reason}
+                      </span>
+                    ))}
+                  </div>
+                  
+                  <div className="grid grid-cols-2 gap-4 text-sm">
+                    <div>
+                      <div className="text-slate-500 text-xs mb-1">Bankový pohyb</div>
+                      <div className="font-medium">{match.bankTransaction.counterpartyName || "—"}</div>
+                      <div className="text-slate-600">{match.bankTransaction.description}</div>
+                      <div className={`font-mono font-semibold ${
+                        match.bankTransaction.type === "CREDIT" ? "text-emerald-600" : "text-rose-600"
+                      }`}>
+                        {match.bankTransaction.type === "CREDIT" ? "+" : "-"}
+                        {formatEUR(match.bankTransaction.amount)}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-slate-500 text-xs mb-1">Doklad v systéme</div>
+                      <div className="font-medium">{match.entry.partnerSnapshot?.name || "—"}</div>
+                      <div className="text-slate-600">{match.entry.description || match.entry.docNumber}</div>
+                      <div className={`font-mono font-semibold ${
+                        match.entry.type === "INCOME" ? "text-emerald-600" : "text-rose-600"
+                      }`}>
+                        {match.entry.type === "INCOME" ? "+" : "-"}
+                        {formatEUR(match.entry.amount)}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <button
+                  onClick={() => handlePair(match)}
+                  disabled={pairing === match.entry.id}
+                  className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50 text-sm font-medium whitespace-nowrap"
+                >
+                  {pairing === match.entry.id ? "Párujem..." : "Spárovať"}
+                </button>
+              </div>
+            </div>
+          ))}
+
+          {matches.length === 0 && (
+            <div className="text-center py-8 text-slate-500">
+              Žiadne návrhy na párovanie
+            </div>
+          )}
+        </div>
+
+        <div className="flex justify-end mt-6">
+          <button
+            onClick={onClose}
+            className="px-4 py-2.5 rounded-xl border border-slate-200 text-slate-700 font-medium hover:bg-slate-50"
+          >
+            Zavrieť
+          </button>
+        </div>
       </div>
     </div>
   );
